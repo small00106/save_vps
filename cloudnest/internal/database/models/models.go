@@ -165,3 +165,10 @@ type AuditLog struct {
 	IP        string    `json:"ip"`
 	CreatedAt time.Time `json:"created_at"`
 }
+
+// ==================== 系统设置 ====================
+
+type Setting struct {
+	Key   string `gorm:"primaryKey;size:64" json:"key"`
+	Value string `gorm:"type:text" json:"value"`
+}

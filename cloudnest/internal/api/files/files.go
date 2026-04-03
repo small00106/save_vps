@@ -1,6 +1,7 @@
 package files
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -12,6 +13,7 @@ import (
 	"github.com/cloudnest/cloudnest/internal/database/dbcore"
 	"github.com/cloudnest/cloudnest/internal/database/models"
 	"github.com/cloudnest/cloudnest/internal/transfer"
+	"github.com/cloudnest/cloudnest/internal/ws"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 )
@@ -179,7 +181,7 @@ func GetDownloadURL(c *gin.Context) {
 	fileID := c.Param("id")
 
 	var file models.File
-	if err := dbcore.DB().Where("file_id = ?", fileID).First(&file).Error; err != nil {
+	if err := dbcore.DB().Where("file_id = ? AND status != ?", fileID, "deleting").First(&file).Error; err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "file not found"})
 		return
 	}
@@ -212,7 +214,7 @@ func ListFiles(c *gin.Context) {
 	path := c.DefaultQuery("path", "/")
 
 	var files []models.File
-	dbcore.DB().Where("path = ?", path).Find(&files)
+	dbcore.DB().Where("path = ? AND status != ?", path, "deleting").Find(&files)
 	c.JSON(http.StatusOK, files)
 }
 
@@ -242,12 +244,27 @@ func CreateDir(c *gin.Context) {
 func DeleteFile(c *gin.Context) {
 	fileID := c.Param("id")
 
-	// Soft delete
-	dbcore.DB().Where("file_id = ?", fileID).Delete(&models.File{})
+	// Mark file as deleting (don't soft delete yet — wait for agent confirmations)
+	dbcore.DB().Model(&models.File{}).Where("file_id = ?", fileID).Update("status", "deleting")
 
-	// TODO: Send delete commands to agents holding replicas
+	// Find replicas and send delete commands to online agents
+	var replicas []models.FileReplica
+	dbcore.DB().Where("file_id = ?", fileID).Find(&replicas)
 
-	c.JSON(http.StatusOK, gin.H{"message": "file deleted"})
+	hub := ws.GetHub()
+	for _, r := range replicas {
+		params, _ := json.Marshal(map[string]string{"file_id": fileID})
+		hub.SendToAgent(r.NodeUUID, &ws.RPCMessage{
+			JSONRPC: "2.0",
+			Method:  "master.deleteFile",
+			Params:  params,
+		})
+	}
+
+	// Don't soft delete here. handleFileDeleted will remove replicas one by one.
+	// Once all replicas are gone, the GC task will soft delete the file record.
+
+	c.JSON(http.StatusOK, gin.H{"message": "file deletion initiated"})
 }
 
 // MoveFile handles PUT /api/files/:id/move

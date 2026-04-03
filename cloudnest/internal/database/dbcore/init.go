@@ -57,6 +57,7 @@ func Init(dbType, dsn string) error {
 			&models.PingResult{},
 			&models.CommandTask{},
 			&models.AuditLog{},
+			&models.Setting{},
 		)
 		if initErr != nil {
 			return

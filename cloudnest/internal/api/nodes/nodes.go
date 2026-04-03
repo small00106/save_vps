@@ -24,7 +24,7 @@ func List(c *gin.Context) {
 	result := make([]NodeWithMetrics, 0, len(nodes))
 	for _, node := range nodes {
 		nwm := NodeWithMetrics{Node: node}
-		if cached, found := cache.MetricsCache.Get("metric:" + node.UUID); found {
+		if cached, found := cache.FileTreeCache.Get("metric:" + node.UUID); found {
 			if m, ok := cached.(*models.NodeMetric); ok {
 				nwm.LatestMetric = m
 			}
@@ -47,7 +47,7 @@ func Get(c *gin.Context) {
 
 	// Include latest metric
 	var latestMetric *models.NodeMetric
-	if cached, found := cache.MetricsCache.Get("metric:" + uuid); found {
+	if cached, found := cache.FileTreeCache.Get("metric:" + uuid); found {
 		if m, ok := cached.(*models.NodeMetric); ok {
 			latestMetric = m
 		}

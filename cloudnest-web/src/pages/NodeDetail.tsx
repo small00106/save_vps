@@ -5,7 +5,7 @@ import {
 } from "lucide-react";
 import {
   getNode, getNodeMetrics, getNodeFiles, getNodeDownloadURL,
-  type Node, type NodeMetric, type FileEntry,
+  type Node, type FileEntry,
 } from "../api/client";
 import {
   ResponsiveContainer, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend,
@@ -24,7 +24,7 @@ const RANGES = ["1h", "4h", "24h", "7d"] as const;
 export default function NodeDetail() {
   const { uuid } = useParams<{ uuid: string }>();
   const [node, setNode] = useState<Node | null>(null);
-  const [metrics, setMetrics] = useState<NodeMetric[]>([]);
+  const [metrics, setMetrics] = useState<any[]>([]);
   const [range, setRange] = useState<string>("1h");
   const [tab, setTab] = useState<"metrics" | "files">("metrics");
   const [loading, setLoading] = useState(true);
@@ -63,8 +63,8 @@ export default function NodeDetail() {
 
   const chartData = useMemo(
     () =>
-      metrics.map((m) => ({
-        time: new Date(m.timestamp).toLocaleTimeString(),
+      metrics.map((m: any) => ({
+        time: new Date(m.timestamp || m.bucket_time).toLocaleTimeString(),
         CPU: m.cpu_percent,
         RAM: m.mem_percent,
         Disk: m.disk_percent,

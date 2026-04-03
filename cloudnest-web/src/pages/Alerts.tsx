@@ -12,6 +12,8 @@ const CHANNEL_TYPE_STYLES: Record<string, { bg: string; text: string; icon: type
   telegram: { bg: "bg-blue-500/10", text: "text-[#3b82f6]", icon: Send },
   webhook: { bg: "bg-zinc-500/10", text: "text-[#a1a1aa]", icon: Globe },
   email: { bg: "bg-amber-500/10", text: "text-[#f59e0b]", icon: Mail },
+  bark: { bg: "bg-green-500/10", text: "text-[#22c55e]", icon: Bell },
+  serverchan: { bg: "bg-purple-500/10", text: "text-[#a855f7]", icon: Send },
 };
 
 const METRICS = ["cpu", "mem", "disk", "offline"];
@@ -36,8 +38,9 @@ export default function Alerts() {
 
   // Channel form
   const [channelName, setChannelName] = useState("");
-  const [channelType, setChannelType] = useState<"webhook" | "email" | "telegram" | "bark">("webhook");
+  const [channelType, setChannelType] = useState<"webhook" | "email" | "telegram" | "bark" | "serverchan">("webhook");
   const [channelConfigUrl, setChannelConfigUrl] = useState("");
+  const [channelConfigSendKey, setChannelConfigSendKey] = useState("");
   const [channelConfigBotToken, setChannelConfigBotToken] = useState("");
   const [channelConfigChatId, setChannelConfigChatId] = useState("");
   const [channelConfigSmtpHost, setChannelConfigSmtpHost] = useState("");
@@ -113,6 +116,9 @@ export default function Alerts() {
           username: channelConfigSmtpUser, password: channelConfigSmtpPass,
           from: channelConfigFrom, to: channelConfigTo,
         };
+        break;
+      case "serverchan":
+        configObj = { send_key: channelConfigSendKey };
         break;
     }
 
@@ -293,6 +299,7 @@ export default function Alerts() {
                   <option value="telegram">Telegram</option>
                   <option value="email">Email</option>
                   <option value="bark">Bark</option>
+                  <option value="serverchan">ServerChan</option>
                 </select>
               </div>
             </div>
@@ -346,6 +353,14 @@ export default function Alerts() {
                   <label className="block text-xs text-[#a1a1aa] mb-1">To</label>
                   <input value={channelConfigTo} onChange={(e) => setChannelConfigTo(e.target.value)} className={inputClass} placeholder="admin@example.com" />
                 </div>
+              </div>
+            )}
+
+            {/* ServerChan */}
+            {channelType === "serverchan" && (
+              <div>
+                <label className="block text-xs text-[#a1a1aa] mb-1">SendKey</label>
+                <input value={channelConfigSendKey} onChange={(e) => setChannelConfigSendKey(e.target.value)} className={inputClass} placeholder="SCT1234567890" />
               </div>
             )}
 

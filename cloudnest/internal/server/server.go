@@ -98,6 +98,7 @@ func SetupRouter() *gin.Engine {
 
 			// Admin
 			authed.GET("/admin/settings", adminAPI.GetSettings)
+			authed.PUT("/admin/settings", adminAPI.UpdateSettings)
 			authed.GET("/admin/audit", adminAPI.GetAuditLogs)
 		}
 	}
@@ -177,12 +178,13 @@ func generateInstallScript(masterURL string) string {
 set -e
 
 # CloudNest Agent One-Click Installer
-# Usage: curl -sSL ` + masterURL + `/install.sh | bash -s -- --token <registration_token>
+# Usage: curl -sSL ` + masterURL + `/install.sh | bash -s -- --token <registration_token> --secret <signing_secret>
 
 MASTER_URL="` + masterURL + `"
 INSTALL_DIR="/opt/cloudnest-agent"
 SERVICE_NAME="cloudnest-agent"
 REG_TOKEN=""
+SIGNING_SECRET=""
 PORT=8801
 SCAN_DIRS="/data"
 
@@ -190,6 +192,7 @@ SCAN_DIRS="/data"
 while [[ $# -gt 0 ]]; do
     case $1 in
         --token) REG_TOKEN="$2"; shift 2 ;;
+        --secret) SIGNING_SECRET="$2"; shift 2 ;;
         --port) PORT="$2"; shift 2 ;;
         --scan-dirs) SCAN_DIRS="$2"; shift 2 ;;
         *) echo "Unknown option: $1"; exit 1 ;;
@@ -198,7 +201,12 @@ done
 
 if [ -z "$REG_TOKEN" ]; then
     echo "Error: --token is required"
-    echo "Usage: curl -sSL ${MASTER_URL}/install.sh | bash -s -- --token <token>"
+    echo "Usage: curl -sSL ${MASTER_URL}/install.sh | bash -s -- --token <token> --secret <secret>"
+    exit 1
+fi
+
+if [ -z "$SIGNING_SECRET" ]; then
+    echo "Error: --secret is required (the CLOUDNEST_SIGNING_SECRET value from your master)"
     exit 1
 fi
 
@@ -246,7 +254,7 @@ ExecStart=${INSTALL_DIR}/cloudnest-agent run
 Restart=always
 RestartSec=5
 LimitNOFILE=65535
-Environment=CLOUDNEST_SIGNING_SECRET=cloudnest-default-secret
+Environment=CLOUDNEST_SIGNING_SECRET=${SIGNING_SECRET}
 
 [Install]
 WantedBy=multi-user.target
@@ -288,8 +296,8 @@ func dashboardWS(c *gin.Context) {
 		return
 	}
 	hub := ws.GetDashboardHub()
-	hub.Register(conn)
-	defer hub.Unregister(conn)
+	sc := hub.Register(conn)
+	defer hub.Unregister(sc)
 
 	for {
 		if _, _, err := conn.ReadMessage(); err != nil {

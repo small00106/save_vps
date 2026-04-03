@@ -50,12 +50,16 @@ func evaluateRule(rule *models.AlertRule) {
 		case "offline":
 			triggered = node.Status == "offline"
 		case "cpu", "mem", "disk":
-			triggered = checkMetricThreshold(node.UUID, rule)
+			triggered = checkSustainedThreshold(node.UUID, rule)
 		}
 
 		if triggered {
-			// Check cooldown (don't fire more than once per Duration)
-			if !rule.LastFiredAt.IsZero() && time.Since(rule.LastFiredAt) < time.Duration(rule.Duration)*time.Second {
+			// Cooldown: don't fire again within 2x duration
+			cooldown := time.Duration(rule.Duration*2) * time.Second
+			if cooldown < 5*time.Minute {
+				cooldown = 5 * time.Minute
+			}
+			if !rule.LastFiredAt.IsZero() && time.Since(rule.LastFiredAt) < cooldown {
 				continue
 			}
 			fireAlert(rule, &node)
@@ -63,33 +67,57 @@ func evaluateRule(rule *models.AlertRule) {
 	}
 }
 
-func checkMetricThreshold(uuid string, rule *models.AlertRule) bool {
-	cached, found := cache.MetricsCache.Get("metric:" + uuid)
-	if !found {
-		return false
+// checkSustainedThreshold checks if metric exceeded threshold for the entire duration window.
+func checkSustainedThreshold(uuid string, rule *models.AlertRule) bool {
+	since := time.Now().Add(-time.Duration(rule.Duration) * time.Second)
+	var metrics []models.NodeMetric
+	dbcore.DB().Where("node_uuid = ? AND timestamp > ?", uuid, since).
+		Order("timestamp ASC").Find(&metrics)
+
+	// Also include the latest real-time cached metric (not yet flushed to DB)
+	if cached, found := cache.FileTreeCache.Get("metric:" + uuid); found {
+		if m, ok := cached.(*models.NodeMetric); ok && m.Timestamp.After(since) {
+			metrics = append(metrics, *m)
+		}
 	}
-	metric, ok := cached.(*models.NodeMetric)
-	if !ok {
+
+	// Need at least 2 samples to confirm "sustained"
+	if len(metrics) < 2 {
 		return false
 	}
 
-	var value float64
-	switch rule.Metric {
-	case "cpu":
-		value = metric.CPUPercent
-	case "mem":
-		value = metric.MemPercent
-	case "disk":
-		value = metric.DiskPercent
+	// The samples must span at least half the duration to count as "sustained"
+	earliest := metrics[0].Timestamp
+	latest := metrics[len(metrics)-1].Timestamp
+	if latest.Sub(earliest) < time.Duration(rule.Duration/2)*time.Second {
+		return false
 	}
 
-	switch rule.Operator {
-	case "gt":
-		return value > rule.Threshold
-	case "lt":
-		return value < rule.Threshold
+	for _, m := range metrics {
+		var value float64
+		switch rule.Metric {
+		case "cpu":
+			value = m.CPUPercent
+		case "mem":
+			value = m.MemPercent
+		case "disk":
+			value = m.DiskPercent
+		}
+
+		exceeded := false
+		switch rule.Operator {
+		case "gt":
+			exceeded = value > rule.Threshold
+		case "lt":
+			exceeded = value < rule.Threshold
+		}
+
+		if !exceeded {
+			return false // any sample below threshold = not sustained
+		}
 	}
-	return false
+
+	return true
 }
 
 func fireAlert(rule *models.AlertRule, node *models.Node) {

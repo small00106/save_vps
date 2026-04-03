@@ -1,17 +1,34 @@
 package cache
 
 import (
-	"time"
+	"sync"
 
 	gocache "github.com/patrickmn/go-cache"
 )
 
 var (
-	MetricsCache  *gocache.Cache
 	FileTreeCache *gocache.Cache
+
+	metricsMu     sync.Mutex
+	metricsBuffer []interface{} // stores *models.NodeMetric
 )
 
 func Init() {
-	MetricsCache = gocache.New(1*time.Minute, 2*time.Minute)
-	FileTreeCache = gocache.New(5*time.Minute, 10*time.Minute)
+	FileTreeCache = gocache.New(gocache.NoExpiration, 0)
+}
+
+// PushMetric appends a metric to the buffer.
+func PushMetric(metric interface{}) {
+	metricsMu.Lock()
+	metricsBuffer = append(metricsBuffer, metric)
+	metricsMu.Unlock()
+}
+
+// DrainMetrics returns all buffered metrics and clears the buffer.
+func DrainMetrics() []interface{} {
+	metricsMu.Lock()
+	buf := metricsBuffer
+	metricsBuffer = nil
+	metricsMu.Unlock()
+	return buf
 }

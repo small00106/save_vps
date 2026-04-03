@@ -2,8 +2,11 @@ package agent
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"net/http"
@@ -12,6 +15,7 @@ import (
 	"os/signal"
 	"runtime"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -21,8 +25,23 @@ import (
 )
 
 // currentClient holds the active WS client so the HTTP server can use it.
-var currentClient *ws.Client
-var currentUUID string
+var (
+	clientMu      sync.Mutex
+	currentClient *ws.Client
+	currentUUID   string
+)
+
+func setCurrentClient(c *ws.Client) {
+	clientMu.Lock()
+	currentClient = c
+	clientMu.Unlock()
+}
+
+func getCurrentClient() *ws.Client {
+	clientMu.Lock()
+	defer clientMu.Unlock()
+	return currentClient
+}
 
 func Run(cfg *Config) error {
 	log.Printf("Starting CloudNest Agent (UUID: %s)", cfg.UUID)
@@ -36,8 +55,8 @@ func Run(cfg *Config) error {
 
 	// Wire up the file-stored callback so HTTP upload handler can notify master
 	agentServer.OnFileStored = func(fileID string) {
-		if currentClient != nil {
-			currentClient.Send("agent.fileStored", map[string]interface{}{
+		if c := getCurrentClient(); c != nil {
+			c.Send("agent.fileStored", map[string]interface{}{
 				"file_id": fileID,
 			})
 		}
@@ -67,7 +86,7 @@ func Run(cfg *Config) error {
 				time.Sleep(5 * time.Second)
 				continue
 			}
-			currentClient = client
+			setCurrentClient(client)
 
 			heartbeatStop := make(chan struct{})
 			fileTreeStop := make(chan struct{})
@@ -86,7 +105,7 @@ func Run(cfg *Config) error {
 				log.Printf("WS disconnected: %v, reconnecting...", err)
 			}
 
-			currentClient = nil
+			setCurrentClient(nil)
 			close(heartbeatStop)
 			close(fileTreeStop)
 			close(pingCancel) // stops all running ping goroutines
@@ -147,11 +166,12 @@ func sendHeartbeat(client *ws.Client, cfg *Config) {
 }
 
 func fileTreeLoop(client *ws.Client, cfg *Config, stop chan struct{}) {
-	entries := reporter.ScanDirectories(cfg.ScanDirs)
+	// First scan: full
+	prevEntries := reporter.ScanDirectories(cfg.ScanDirs)
 	client.Send("agent.fileTree", map[string]interface{}{
 		"uuid":    cfg.UUID,
 		"full":    true,
-		"entries": entries,
+		"entries": prevEntries,
 	})
 
 	ticker := time.NewTicker(60 * time.Second)
@@ -160,12 +180,22 @@ func fileTreeLoop(client *ws.Client, cfg *Config, stop chan struct{}) {
 	for {
 		select {
 		case <-ticker.C:
-			entries := reporter.ScanDirectories(cfg.ScanDirs)
+			currEntries := reporter.ScanDirectories(cfg.ScanDirs)
+			diff := reporter.DiffFileTrees(prevEntries, currEntries)
+
+			if len(diff.Added) == 0 && len(diff.Removed) == 0 {
+				// No changes, skip
+				prevEntries = currEntries
+				continue
+			}
+
 			client.Send("agent.fileTree", map[string]interface{}{
 				"uuid":    cfg.UUID,
-				"full":    true,
-				"entries": entries,
+				"full":    false,
+				"added":   diff.Added,
+				"removed": diff.Removed,
 			})
+			prevEntries = currEntries
 		case <-stop:
 			return
 		}
@@ -181,9 +211,9 @@ func handleMasterCommand(client *ws.Client, cfg *Config, msg *ws.RPCMessage, pin
 	case "master.startPing":
 		go executePing(client, msg.Params, pingCancel)
 	case "master.replicateFile":
-		log.Printf("[FILE] Received replication request (not yet implemented)")
+		go replicateFile(client, msg.Params)
 	case "master.verifyFile":
-		log.Printf("[FILE] Received verify request (not yet implemented)")
+		go verifyFile(client, msg.Params)
 	default:
 		log.Printf("[WS] Unknown command: %s", msg.Method)
 	}
@@ -241,6 +271,10 @@ func deleteFile(client *ws.Client, params json.RawMessage) {
 		FileID string `json:"file_id"`
 	}
 	if err := json.Unmarshal(params, &data); err != nil {
+		return
+	}
+	if len(data.FileID) < 2 {
+		log.Printf("[FILE] Delete error: invalid file_id %q", data.FileID)
 		return
 	}
 
@@ -337,4 +371,124 @@ func doPing(client *ws.Client, task *struct {
 		"latency":   latency,
 		"success":   success,
 	})
+}
+
+// === File Replication ===
+
+func replicateFile(client *ws.Client, params json.RawMessage) {
+	var data struct {
+		FileID    string `json:"file_id"`
+		SourceURL string `json:"source_url"` // signed URL to download from source agent
+	}
+	if err := json.Unmarshal(params, &data); err != nil {
+		log.Printf("[FILE] Replicate parse error: %v", err)
+		return
+	}
+
+	log.Printf("[FILE] Replicating %s from %s", data.FileID, data.SourceURL)
+
+	if len(data.FileID) < 2 {
+		log.Printf("[FILE] Replicate error: invalid file_id %q", data.FileID)
+		return
+	}
+
+	// Download from source agent
+	resp, err := http.Get(data.SourceURL)
+	if err != nil {
+		log.Printf("[FILE] Replicate download error: %v", err)
+		client.Send("agent.replicateResult", map[string]interface{}{
+			"file_id": data.FileID,
+			"success": false,
+			"error":   err.Error(),
+		})
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		log.Printf("[FILE] Replicate download status: %d", resp.StatusCode)
+		client.Send("agent.replicateResult", map[string]interface{}{
+			"file_id": data.FileID,
+			"success": false,
+			"error":   fmt.Sprintf("HTTP %d", resp.StatusCode),
+		})
+		return
+	}
+
+	// Save locally
+	dir := fmt.Sprintf("/data/files/%s", data.FileID[:2])
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		log.Printf("[FILE] Replicate mkdir error: %v", err)
+		return
+	}
+
+	filePath := fmt.Sprintf("%s/%s", dir, data.FileID)
+	f, err := os.Create(filePath)
+	if err != nil {
+		log.Printf("[FILE] Replicate create error: %v", err)
+		return
+	}
+
+	if _, err := io.Copy(f, resp.Body); err != nil {
+		f.Close()
+		os.Remove(filePath)
+		log.Printf("[FILE] Replicate write error: %v", err)
+		return
+	}
+	f.Close()
+
+	// Notify master
+	client.Send("agent.fileStored", map[string]interface{}{
+		"file_id": data.FileID,
+	})
+	log.Printf("[FILE] Replicated: %s", data.FileID)
+}
+
+// === File Verification ===
+
+func verifyFile(client *ws.Client, params json.RawMessage) {
+	var data struct {
+		FileID           string `json:"file_id"`
+		ExpectedChecksum string `json:"expected_checksum"`
+	}
+	if err := json.Unmarshal(params, &data); err != nil {
+		log.Printf("[FILE] Verify parse error: %v", err)
+		return
+	}
+	if len(data.FileID) < 2 {
+		log.Printf("[FILE] Verify error: invalid file_id %q", data.FileID)
+		return
+	}
+
+	filePath := fmt.Sprintf("/data/files/%s/%s", data.FileID[:2], data.FileID)
+	f, err := os.Open(filePath)
+	if err != nil {
+		client.Send("agent.verifyResult", map[string]interface{}{
+			"file_id": data.FileID,
+			"match":   false,
+			"error":   "file not found",
+		})
+		return
+	}
+	defer f.Close()
+
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		client.Send("agent.verifyResult", map[string]interface{}{
+			"file_id": data.FileID,
+			"match":   false,
+			"error":   err.Error(),
+		})
+		return
+	}
+
+	checksum := hex.EncodeToString(h.Sum(nil))
+	match := data.ExpectedChecksum == "" || checksum == data.ExpectedChecksum
+
+	client.Send("agent.verifyResult", map[string]interface{}{
+		"file_id":  data.FileID,
+		"checksum": checksum,
+		"match":    match,
+	})
+	log.Printf("[FILE] Verified %s: checksum=%s match=%v", data.FileID, checksum[:12], match)
 }

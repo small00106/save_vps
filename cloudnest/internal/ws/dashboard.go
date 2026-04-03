@@ -10,39 +10,47 @@ import (
 // DashboardHub manages frontend WebSocket connections for real-time updates.
 type DashboardHub struct {
 	mu      sync.RWMutex
-	clients map[*websocket.Conn]bool
+	clients map[*SafeConn]bool
 }
 
 var dashboardHub = &DashboardHub{
-	clients: make(map[*websocket.Conn]bool),
+	clients: make(map[*SafeConn]bool),
 }
 
 func GetDashboardHub() *DashboardHub {
 	return dashboardHub
 }
 
-func (dh *DashboardHub) Register(conn *websocket.Conn) {
+func (dh *DashboardHub) Register(conn *websocket.Conn) *SafeConn {
+	sc := NewSafeConn(conn)
 	dh.mu.Lock()
 	defer dh.mu.Unlock()
-	dh.clients[conn] = true
+	dh.clients[sc] = true
+	return sc
 }
 
-func (dh *DashboardHub) Unregister(conn *websocket.Conn) {
+func (dh *DashboardHub) Unregister(sc *SafeConn) {
 	dh.mu.Lock()
 	defer dh.mu.Unlock()
-	delete(dh.clients, conn)
-	conn.Close()
+	if dh.clients[sc] {
+		delete(dh.clients, sc)
+		sc.Close()
+	}
 }
 
 // Broadcast sends a message to all connected dashboard clients.
 func (dh *DashboardHub) Broadcast(msg interface{}) {
 	dh.mu.RLock()
-	defer dh.mu.RUnlock()
+	clients := make([]*SafeConn, 0, len(dh.clients))
+	for sc := range dh.clients {
+		clients = append(clients, sc)
+	}
+	dh.mu.RUnlock()
 
-	for conn := range dh.clients {
-		if err := conn.WriteJSON(msg); err != nil {
+	for _, sc := range clients {
+		if err := sc.WriteJSON(msg); err != nil {
 			log.Printf("[Dashboard] Failed to send: %v", err)
-			go dh.Unregister(conn)
+			dh.Unregister(sc)
 		}
 	}
 }

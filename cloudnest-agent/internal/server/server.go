@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/cloudnest/cloudnest-agent/internal/terminal"
 	"github.com/gin-gonic/gin"
 )
 
@@ -32,6 +33,7 @@ func Start(addr string, rateLimit int64) error {
 		api.GET("/health", func(c *gin.Context) {
 			c.JSON(http.StatusOK, gin.H{"status": "ok"})
 		})
+		api.GET("/terminal", validateSignedURL(), terminal.HandleTerminal)
 	}
 
 	return r.Run(addr)
@@ -42,9 +44,13 @@ func validateSignedURL() gin.HandlerFunc {
 		expires := c.Query("expires")
 		sig := c.Query("sig")
 
+		// Determine the signed identifier: file_id param, path query, or id query
 		fileID := c.Param("file_id")
 		if fileID == "" {
 			fileID = c.Query("path")
+		}
+		if fileID == "" {
+			fileID = c.Query("id")
 		}
 
 		if fileID == "" || expires == "" || sig == "" {

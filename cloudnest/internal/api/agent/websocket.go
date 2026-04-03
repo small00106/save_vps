@@ -139,17 +139,24 @@ func handleAgentMessage(uuid string, msg *ws.RPCMessage) {
 		handlePingResult(uuid, msg.Params)
 	case "agent.commandResult":
 		handleCommandResult(uuid, msg.Params)
+	case "agent.verifyResult":
+		handleVerifyResult(uuid, msg.Params)
+	case "agent.replicateResult":
+		handleReplicateResult(uuid, msg.Params)
 	default:
 		log.Printf("[WS] Unknown method from %s: %s", uuid, msg.Method)
 	}
 }
 
-func handleHeartbeat(uuid string, params json.RawMessage) {
+func handleHeartbeat(connUUID string, params json.RawMessage) {
 	var hb HeartbeatParams
 	if err := json.Unmarshal(params, &hb); err != nil {
-		log.Printf("[Heartbeat] Parse error from %s: %v", uuid, err)
+		log.Printf("[Heartbeat] Parse error from %s: %v", connUUID, err)
 		return
 	}
+
+	// Always use the authenticated UUID from the WS connection, not from params
+	uuid := connUUID
 
 	// Update node last_seen and disk info
 	dbcore.DB().Model(&models.Node{}).Where("uuid = ?", uuid).Updates(map[string]interface{}{
@@ -181,8 +188,11 @@ func handleHeartbeat(uuid string, params json.RawMessage) {
 		Timestamp:    time.Now(),
 	}
 
-	// Store in cache for batch flush
-	cache.MetricsCache.Set("metric:"+uuid, &metric, 0)
+	// Store in buffer for batch flush
+	cache.PushMetric(&metric)
+
+	// Also keep latest metric for real-time dashboard queries
+	cache.FileTreeCache.Set("metric:"+uuid, &metric, 0)
 
 	// Push to dashboard WebSocket clients
 	ws.GetDashboardHub().Broadcast(gin.H{
@@ -213,10 +223,13 @@ func handleFileTree(uuid string, params json.RawMessage) {
 
 		entries := existing.([]FileEntry)
 
-		// Remove deleted entries
-		removeSet := make(map[string]bool, len(ft.Removed))
+		// Build set of paths to remove (explicitly removed + modified ones in Added)
+		removeSet := make(map[string]bool, len(ft.Removed)+len(ft.Added))
 		for _, path := range ft.Removed {
 			removeSet[path] = true
+		}
+		for _, e := range ft.Added {
+			removeSet[e.Path] = true
 		}
 		filtered := make([]FileEntry, 0, len(entries))
 		for _, e := range entries {
@@ -225,7 +238,7 @@ func handleFileTree(uuid string, params json.RawMessage) {
 			}
 		}
 
-		// Add new entries
+		// Add new/modified entries
 		filtered = append(filtered, ft.Added...)
 		cache.FileTreeCache.Set("filetree:"+uuid, filtered, 0)
 	}
@@ -299,6 +312,50 @@ func handleCommandResult(uuid string, params json.RawMessage) {
 		"exit_code": data.ExitCode,
 		"status":    "done",
 	})
+}
+
+func handleVerifyResult(uuid string, params json.RawMessage) {
+	var data struct {
+		FileID   string `json:"file_id"`
+		Checksum string `json:"checksum"`
+		Match    bool   `json:"match"`
+		Error    string `json:"error"`
+	}
+	if err := json.Unmarshal(params, &data); err != nil {
+		return
+	}
+
+	if data.Match {
+		dbcore.DB().Model(&models.FileReplica{}).
+			Where("file_id = ? AND node_uuid = ?", data.FileID, uuid).
+			Updates(map[string]interface{}{"status": "verified", "verified_at": time.Now()})
+	} else {
+		dbcore.DB().Model(&models.FileReplica{}).
+			Where("file_id = ? AND node_uuid = ?", data.FileID, uuid).
+			Update("status", "lost")
+	}
+
+	if data.Checksum != "" {
+		dbcore.DB().Model(&models.File{}).Where("file_id = ? AND checksum = ?", data.FileID, "").
+			Update("checksum", data.Checksum)
+	}
+
+	log.Printf("[Verify] %s on %s: match=%v", data.FileID, uuid, data.Match)
+}
+
+func handleReplicateResult(uuid string, params json.RawMessage) {
+	var data struct {
+		FileID  string `json:"file_id"`
+		Success bool   `json:"success"`
+		Error   string `json:"error"`
+	}
+	if err := json.Unmarshal(params, &data); err != nil {
+		return
+	}
+
+	if !data.Success {
+		log.Printf("[Replicate] Failed for %s on %s: %s", data.FileID, uuid, data.Error)
+	}
 }
 
 func pushPingTasks(conn *ws.SafeConn) {

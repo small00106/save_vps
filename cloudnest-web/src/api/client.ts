@@ -172,7 +172,7 @@ export interface AlertRule {
 export interface AlertChannel {
   id: number;
   name: string;
-  type: string; // "telegram" | "webhook" | "email" | "bark"
+  type: string; // "telegram" | "webhook" | "email" | "bark" | "serverchan"
   config: string; // JSON string
 }
 

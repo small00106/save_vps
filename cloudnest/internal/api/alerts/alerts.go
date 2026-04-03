@@ -30,19 +30,31 @@ func CreateRule(c *gin.Context) {
 func UpdateRule(c *gin.Context) {
 	id := c.Param("id")
 
-	var rule models.AlertRule
-	if err := dbcore.DB().First(&rule, id).Error; err != nil {
+	var existing models.AlertRule
+	if err := dbcore.DB().First(&existing, id).Error; err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "rule not found"})
 		return
 	}
 
-	if err := c.ShouldBindJSON(&rule); err != nil {
+	// Bind to a map so we only update fields that were actually sent
+	var updates map[string]interface{}
+	if err := c.ShouldBindJSON(&updates); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
-	dbcore.DB().Save(&rule)
-	c.JSON(http.StatusOK, rule)
+	// Never allow overwriting ID or CreatedAt
+	delete(updates, "id")
+	delete(updates, "created_at")
+
+	if err := dbcore.DB().Model(&existing).Updates(updates).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "update failed"})
+		return
+	}
+
+	// Reload and return
+	dbcore.DB().First(&existing, id)
+	c.JSON(http.StatusOK, existing)
 }
 
 // DeleteRule handles DELETE /api/alerts/rules/:id
@@ -74,17 +86,21 @@ func CreateChannel(c *gin.Context) {
 func UpdateChannel(c *gin.Context) {
 	id := c.Param("id")
 
-	var channel models.AlertChannel
-	if err := dbcore.DB().First(&channel, id).Error; err != nil {
+	var existing models.AlertChannel
+	if err := dbcore.DB().First(&existing, id).Error; err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "channel not found"})
 		return
 	}
 
-	if err := c.ShouldBindJSON(&channel); err != nil {
+	var updates map[string]interface{}
+	if err := c.ShouldBindJSON(&updates); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
-	dbcore.DB().Save(&channel)
-	c.JSON(http.StatusOK, channel)
+	delete(updates, "id")
+
+	dbcore.DB().Model(&existing).Updates(updates)
+	dbcore.DB().First(&existing, id)
+	c.JSON(http.StatusOK, existing)
 }

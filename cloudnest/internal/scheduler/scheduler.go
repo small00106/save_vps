@@ -18,6 +18,7 @@ func StartAll() {
 	go healthChecker(stopCh)
 	go startCompaction(stopCh)
 	go startAlertEvaluator(stopCh)
+	go startGC(stopCh)
 
 	log.Println("[Scheduler] All background tasks started")
 }
@@ -27,7 +28,7 @@ func StopAll() {
 	log.Println("[Scheduler] All background tasks stopped")
 }
 
-// metricFlusher flushes cached metrics to DB every 60 seconds.
+// metricFlusher flushes buffered metrics to DB every 60 seconds.
 func metricFlusher(stop chan struct{}) {
 	ticker := time.NewTicker(60 * time.Second)
 	defer ticker.Stop()
@@ -35,11 +36,10 @@ func metricFlusher(stop chan struct{}) {
 	for {
 		select {
 		case <-ticker.C:
-			items := cache.MetricsCache.Items()
-			for key, item := range items {
-				if metric, ok := item.Object.(*models.NodeMetric); ok {
+			items := cache.DrainMetrics()
+			for _, item := range items {
+				if metric, ok := item.(*models.NodeMetric); ok {
 					dbcore.DB().Create(metric)
-					cache.MetricsCache.Delete(key)
 				}
 			}
 		case <-stop:

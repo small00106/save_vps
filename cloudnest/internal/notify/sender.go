@@ -41,6 +41,12 @@ func NewSender(channelType, config string) (Sender, error) {
 			return nil, err
 		}
 		return &BarkSender{cfg}, nil
+	case "serverchan":
+		var cfg ServerChanConfig
+		if err := json.Unmarshal([]byte(config), &cfg); err != nil {
+			return nil, err
+		}
+		return &ServerChanSender{cfg}, nil
 	default:
 		return nil, fmt.Errorf("unknown channel type: %s", channelType)
 	}
@@ -130,6 +136,30 @@ type BarkSender struct {
 func (s *BarkSender) Send(title, message string) error {
 	url := fmt.Sprintf("%s/%s/%s", strings.TrimSuffix(s.cfg.ServerURL, "/"), title, message)
 	resp, err := http.Get(url)
+	if err != nil {
+		return err
+	}
+	resp.Body.Close()
+	return nil
+}
+
+// === ServerChan ===
+
+type ServerChanConfig struct {
+	SendKey string `json:"send_key"` // e.g. SCT1234567890
+}
+
+type ServerChanSender struct {
+	cfg ServerChanConfig
+}
+
+func (s *ServerChanSender) Send(title, message string) error {
+	url := fmt.Sprintf("https://sctapi.ftqq.com/%s.send", s.cfg.SendKey)
+	body, _ := json.Marshal(map[string]string{
+		"title": title,
+		"desp":  message,
+	})
+	resp, err := http.Post(url, "application/json", bytes.NewReader(body))
 	if err != nil {
 		return err
 	}
