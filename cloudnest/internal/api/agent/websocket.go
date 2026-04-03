@@ -99,12 +99,24 @@ func WebSocketHandler(c *gin.Context) {
 		"last_seen": time.Now(),
 	})
 
+	// Notify dashboard clients
+	ws.GetDashboardHub().Broadcast(gin.H{
+		"type":   "status",
+		"node":   node.UUID,
+		"status": "online",
+	})
+
 	// Push all enabled ping tasks to this agent
 	go pushPingTasks(safeConn)
 
 	defer func() {
 		hub.Unregister(node.UUID)
 		dbcore.DB().Model(&node).Update("status", "offline")
+		ws.GetDashboardHub().Broadcast(gin.H{
+			"type":   "status",
+			"node":   node.UUID,
+			"status": "offline",
+		})
 	}()
 
 	// Read loop

@@ -23,6 +23,7 @@ let globalRetry = 0;
 let globalTimer: ReturnType<typeof setTimeout> | undefined;
 let globalListeners = new Set<() => void>();
 let globalDestroyed = false;
+let globalStatusVersion = 0; // bumped on status changes so consumers can re-fetch
 
 function notifyAll() {
   globalListeners.forEach((fn) => fn());
@@ -60,6 +61,19 @@ function connectGlobal() {
           },
         });
         globalData = next;
+        notifyAll();
+      } else if (msg.type === "status" && msg.node && msg.status) {
+        const next = new Map(globalData);
+        if (msg.status === "offline") {
+          next.delete(msg.node);
+        } else {
+          const existing = next.get(msg.node);
+          if (existing) {
+            next.set(msg.node, { ...existing, status: msg.status });
+          }
+        }
+        globalData = next;
+        globalStatusVersion++;
         notifyAll();
       }
     } catch {
@@ -116,5 +130,6 @@ export function useWebSocket() {
   return {
     nodeData: globalData,
     connected: globalConnected,
+    statusVersion: globalStatusVersion,
   };
 }

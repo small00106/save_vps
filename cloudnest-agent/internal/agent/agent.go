@@ -280,7 +280,15 @@ func deleteFile(client *ws.Client, params json.RawMessage) {
 
 	path := fmt.Sprintf("/data/files/%s/%s", data.FileID[:2], data.FileID)
 	if err := os.Remove(path); err != nil {
-		log.Printf("[FILE] Delete error: %v", err)
+		if os.IsNotExist(err) {
+			// File already gone — still confirm deletion to Master so it can clean up
+			client.Send("agent.fileDeleted", map[string]interface{}{
+				"file_id": data.FileID,
+			})
+			log.Printf("[FILE] Already gone, confirmed: %s", data.FileID)
+		} else {
+			log.Printf("[FILE] Delete error: %v", err)
+		}
 		return
 	}
 

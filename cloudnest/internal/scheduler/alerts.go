@@ -86,10 +86,10 @@ func checkSustainedThreshold(uuid string, rule *models.AlertRule) bool {
 		return false
 	}
 
-	// The samples must span at least half the duration to count as "sustained"
+	// The samples must span at least the full duration to count as "sustained"
 	earliest := metrics[0].Timestamp
 	latest := metrics[len(metrics)-1].Timestamp
-	if latest.Sub(earliest) < time.Duration(rule.Duration/2)*time.Second {
+	if latest.Sub(earliest) < time.Duration(rule.Duration)*time.Second {
 		return false
 	}
 

@@ -49,14 +49,14 @@ export default function Dashboard() {
   const navigate = useNavigate();
   const [nodes, setNodes] = useState<Node[]>([]);
   const [loading, setLoading] = useState(true);
-  const { nodeData, connected } = useWebSocket();
+  const { nodeData, connected, statusVersion } = useWebSocket();
 
   useEffect(() => {
     getNodes()
       .then((data) => setNodes(Array.isArray(data) ? data : []))
       .catch(() => setNodes([]))
       .finally(() => setLoading(false));
-  }, []);
+  }, [statusVersion]);
 
   const onlineCount = nodes.filter((n) => n.status === "online").length;
   const totalStorage = nodes.reduce((s, n) => s + (n.disk_total || 0), 0);

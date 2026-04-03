@@ -168,7 +168,11 @@ func setupFrontend(r *gin.Engine) {
 
 // serveInstallScript serves the agent install script.
 func serveInstallScript(c *gin.Context) {
-	masterURL := "http://" + c.Request.Host
+	scheme := "http"
+	if c.Request.TLS != nil || c.GetHeader("X-Forwarded-Proto") == "https" {
+		scheme = "https"
+	}
+	masterURL := scheme + "://" + c.Request.Host
 	script := generateInstallScript(masterURL)
 	c.Data(http.StatusOK, "text/plain; charset=utf-8", []byte(script))
 }
