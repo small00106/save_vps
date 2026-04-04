@@ -58,7 +58,7 @@ func validateSignedURL() gin.HandlerFunc {
 			return
 		}
 
-		if !validateSignature(fileID, expires, sig) {
+		if !validateSignature(fileID, c.Request.Method, expires, sig) {
 			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "invalid or expired signature"})
 			return
 		}

@@ -94,11 +94,12 @@ func Run(cfg *Config) error {
 			go heartbeatLoop(client, cfg, heartbeatStop)
 			go fileTreeLoop(client, cfg, fileTreeStop)
 
-			// Track active ping tasks so they stop on disconnect
-			pingCancel := make(chan struct{})
+			// Track active ping tasks by task ID so they can be stopped individually.
+			pingStops := make(map[uint]chan struct{})
+			pingStopsMu := &sync.Mutex{}
 
 			client.OnMessage = func(msg *ws.RPCMessage) {
-				handleMasterCommand(client, cfg, msg, pingCancel)
+				handleMasterCommand(client, cfg, msg, pingStopsMu, pingStops)
 			}
 
 			if err := client.ReadLoop(); err != nil {
@@ -108,7 +109,7 @@ func Run(cfg *Config) error {
 			setCurrentClient(nil)
 			close(heartbeatStop)
 			close(fileTreeStop)
-			close(pingCancel) // stops all running ping goroutines
+			stopAllPingTasks(pingStopsMu, pingStops)
 			client.Close()
 		}
 	}()
@@ -202,20 +203,79 @@ func fileTreeLoop(client *ws.Client, cfg *Config, stop chan struct{}) {
 	}
 }
 
-func handleMasterCommand(client *ws.Client, cfg *Config, msg *ws.RPCMessage, pingCancel chan struct{}) {
+func handleMasterCommand(client *ws.Client, cfg *Config, msg *ws.RPCMessage, pingStopsMu *sync.Mutex, pingStops map[uint]chan struct{}) {
 	switch msg.Method {
 	case "master.execCommand":
 		go executeCommand(client, msg.Params)
 	case "master.deleteFile":
 		go deleteFile(client, msg.Params)
 	case "master.startPing":
-		go executePing(client, msg.Params, pingCancel)
+		var task struct {
+			ID uint `json:"id"`
+		}
+		if err := json.Unmarshal(msg.Params, &task); err != nil || task.ID == 0 {
+			log.Printf("[PING] Invalid startPing payload: %v", err)
+			return
+		}
+
+		stop := make(chan struct{})
+		pingStopsMu.Lock()
+		if oldStop, exists := pingStops[task.ID]; exists {
+			close(oldStop) // restart existing task with latest config
+		}
+		pingStops[task.ID] = stop
+		pingStopsMu.Unlock()
+
+		go executePing(client, msg.Params, stop, func() {
+			finishPingTask(task.ID, stop, pingStopsMu, pingStops)
+		})
+	case "master.stopPing":
+		var payload struct {
+			TaskID uint `json:"task_id"`
+		}
+		if err := json.Unmarshal(msg.Params, &payload); err != nil || payload.TaskID == 0 {
+			log.Printf("[PING] Invalid stopPing payload: %v", err)
+			return
+		}
+		if stopped := stopPingTask(payload.TaskID, pingStopsMu, pingStops); stopped {
+			log.Printf("[PING] Stop requested for task %d", payload.TaskID)
+		}
 	case "master.replicateFile":
 		go replicateFile(client, msg.Params)
 	case "master.verifyFile":
 		go verifyFile(client, msg.Params)
 	default:
 		log.Printf("[WS] Unknown command: %s", msg.Method)
+	}
+}
+
+func stopPingTask(taskID uint, pingStopsMu *sync.Mutex, pingStops map[uint]chan struct{}) bool {
+	pingStopsMu.Lock()
+	defer pingStopsMu.Unlock()
+	stop, exists := pingStops[taskID]
+	if !exists {
+		return false
+	}
+	close(stop)
+	delete(pingStops, taskID)
+	return true
+}
+
+func finishPingTask(taskID uint, stop chan struct{}, pingStopsMu *sync.Mutex, pingStops map[uint]chan struct{}) {
+	pingStopsMu.Lock()
+	defer pingStopsMu.Unlock()
+	current, exists := pingStops[taskID]
+	if exists && current == stop {
+		delete(pingStops, taskID)
+	}
+}
+
+func stopAllPingTasks(pingStopsMu *sync.Mutex, pingStops map[uint]chan struct{}) {
+	pingStopsMu.Lock()
+	defer pingStopsMu.Unlock()
+	for taskID, stop := range pingStops {
+		close(stop)
+		delete(pingStops, taskID)
 	}
 }
 
@@ -300,7 +360,11 @@ func deleteFile(client *ws.Client, params json.RawMessage) {
 
 // === Ping Execution ===
 
-func executePing(client *ws.Client, params json.RawMessage, stop chan struct{}) {
+func executePing(client *ws.Client, params json.RawMessage, stop chan struct{}, onExit func()) {
+	if onExit != nil {
+		defer onExit()
+	}
+
 	var task struct {
 		ID       uint   `json:"id"`
 		Type     string `json:"type"`
@@ -345,6 +409,8 @@ func doPing(client *ws.Client, task *struct {
 	var latency float64
 
 	switch task.Type {
+	case "icmp":
+		latency, success = runICMP(task.Target)
 	case "tcp":
 		conn, err := net.DialTimeout("tcp", task.Target, 5*time.Second)
 		if err == nil {
@@ -364,13 +430,8 @@ func doPing(client *ws.Client, task *struct {
 			success = true
 			latency = float64(time.Since(start).Milliseconds())
 		}
-	default: // icmp fallback to TCP port 80
-		conn, err := net.DialTimeout("tcp", task.Target+":80", 5*time.Second)
-		if err == nil {
-			conn.Close()
-			success = true
-			latency = float64(time.Since(start).Milliseconds())
-		}
+	default:
+		log.Printf("[PING] Unsupported task type: %s", task.Type)
 	}
 
 	client.Send("agent.pingResult", map[string]interface{}{

@@ -7,6 +7,7 @@ import (
 	"github.com/cloudnest/cloudnest/internal/cache"
 	"github.com/cloudnest/cloudnest/internal/database/dbcore"
 	"github.com/cloudnest/cloudnest/internal/database/models"
+	"github.com/cloudnest/cloudnest/internal/ws"
 )
 
 var stopCh chan struct{}
@@ -57,9 +58,34 @@ func healthChecker(stop chan struct{}) {
 		select {
 		case <-ticker.C:
 			threshold := time.Now().Add(-30 * time.Second)
-			dbcore.DB().Model(&models.Node{}).
+			var staleOnline []models.Node
+			dbcore.DB().
 				Where("status = ? AND last_seen < ?", "online", threshold).
-				Update("status", "offline")
+				Find(&staleOnline)
+			if len(staleOnline) == 0 {
+				continue
+			}
+
+			uuids := make([]string, 0, len(staleOnline))
+			for _, n := range staleOnline {
+				uuids = append(uuids, n.UUID)
+			}
+			if err := dbcore.DB().Model(&models.Node{}).
+				Where("uuid IN ?", uuids).
+				Update("status", "offline").Error; err != nil {
+				log.Printf("[Scheduler] Failed to mark offline nodes: %v", err)
+				continue
+			}
+
+			// Push offline status updates so dashboard can refresh without waiting
+			// for a reconnect/disconnect event.
+			for _, uuid := range uuids {
+				ws.GetDashboardHub().Broadcast(map[string]string{
+					"type":   "status",
+					"node":   uuid,
+					"status": "offline",
+				})
+			}
 		case <-stop:
 			return
 		}

@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/cloudnest/cloudnest/internal/database/dbcore"
@@ -51,7 +52,9 @@ func Login(c *gin.Context) {
 	}
 	dbcore.DB().Create(&session)
 
-	c.SetCookie("session", token, 30*24*3600, "/", "", false, true)
+	secureCookie := isHTTPSRequest(c)
+	c.SetSameSite(http.SameSiteLaxMode)
+	c.SetCookie("session", token, 30*24*3600, "/", "", secureCookie, true)
 	c.JSON(http.StatusOK, gin.H{
 		"token":    token,
 		"username": user.Username,
@@ -64,7 +67,9 @@ func Logout(c *gin.Context) {
 	if token != "" {
 		dbcore.DB().Where("token = ?", token).Delete(&models.Session{})
 	}
-	c.SetCookie("session", "", -1, "/", "", false, true)
+	secureCookie := isHTTPSRequest(c)
+	c.SetSameSite(http.SameSiteLaxMode)
+	c.SetCookie("session", "", -1, "/", "", secureCookie, true)
 	c.JSON(http.StatusOK, gin.H{"message": "logged out"})
 }
 
@@ -93,4 +98,11 @@ func EnsureDefaultAdmin() {
 		PasswordHash: string(hash),
 	}
 	dbcore.DB().Create(&user)
+}
+
+func isHTTPSRequest(c *gin.Context) bool {
+	if c.Request.TLS != nil {
+		return true
+	}
+	return strings.EqualFold(c.GetHeader("X-Forwarded-Proto"), "https")
 }

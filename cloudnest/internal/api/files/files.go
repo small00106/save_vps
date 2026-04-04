@@ -6,13 +6,11 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
-	"time"
 
 	"github.com/cloudnest/cloudnest/internal/api/agent"
 	"github.com/cloudnest/cloudnest/internal/cache"
 	"github.com/cloudnest/cloudnest/internal/database/dbcore"
 	"github.com/cloudnest/cloudnest/internal/database/models"
-	"github.com/cloudnest/cloudnest/internal/transfer"
 	"github.com/cloudnest/cloudnest/internal/ws"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -60,17 +58,43 @@ func NodeDownloadURL(c *gin.Context) {
 		return
 	}
 
+	// Only allow downloading files that are present in the node's reported file tree.
+	// This prevents signing arbitrary paths outside scanned directories.
+	raw, found := cache.FileTreeCache.Get("filetree:" + nodeUUID)
+	if !found {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "node file tree unavailable"})
+		return
+	}
+	entries, ok := raw.([]agent.FileEntry)
+	if !ok {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "node file tree unavailable"})
+		return
+	}
+	allowed := false
+	for _, e := range entries {
+		if e.Path == filePath {
+			if e.IsDir {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "path is a directory"})
+				return
+			}
+			allowed = true
+			break
+		}
+	}
+	if !allowed {
+		c.JSON(http.StatusNotFound, gin.H{"error": "file not found in node file tree"})
+		return
+	}
+
+	// Verify the node exists and is online
 	var node models.Node
-	if err := dbcore.DB().Where("uuid = ?", nodeUUID).First(&node).Error; err != nil {
+	if err := dbcore.DB().Where("uuid = ? AND status = ?", nodeUUID, "online").First(&node).Error; err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "node not found"})
 		return
 	}
 
-	baseURL := fmt.Sprintf("http://%s:%d/api/browse", node.IP, node.Port)
-	signedURL := transfer.GenerateSignedURL(baseURL, filePath, 5*time.Minute)
-	signedURL += "&path=" + url.QueryEscape(filePath)
-
-	c.JSON(http.StatusOK, gin.H{"url": signedURL})
+	proxyURL := fmt.Sprintf("/api/proxy/browse?node=%s&path=%s", nodeUUID, url.QueryEscape(filePath))
+	c.JSON(http.StatusOK, gin.H{"url": proxyURL})
 }
 
 // Search handles GET /api/files/search?q=keyword
@@ -129,6 +153,25 @@ func InitUpload(c *gin.Context) {
 		return
 	}
 
+	// Resolve online target nodes first. If none are available, fail fast and avoid
+	// creating dangling file records stuck in uploading state.
+	seen := make(map[string]struct{}, len(req.NodeUUIDs))
+	onlineNodes := make([]models.Node, 0, len(req.NodeUUIDs))
+	for _, nodeUUID := range req.NodeUUIDs {
+		if _, exists := seen[nodeUUID]; exists {
+			continue
+		}
+		seen[nodeUUID] = struct{}{}
+		var node models.Node
+		if err := dbcore.DB().Where("uuid = ? AND status = ?", nodeUUID, "online").First(&node).Error; err == nil {
+			onlineNodes = append(onlineNodes, node)
+		}
+	}
+	if len(onlineNodes) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "no online target nodes"})
+		return
+	}
+
 	fileID := uuid.New().String()
 
 	// Create file record
@@ -148,25 +191,19 @@ func InitUpload(c *gin.Context) {
 	}
 	var targets []Target
 
-	for _, nodeUUID := range req.NodeUUIDs {
-		var node models.Node
-		if err := dbcore.DB().Where("uuid = ? AND status = ?", nodeUUID, "online").First(&node).Error; err != nil {
-			continue
-		}
-
+	for _, node := range onlineNodes {
 		replica := models.FileReplica{
 			FileID:   fileID,
-			NodeUUID: nodeUUID,
+			NodeUUID: node.UUID,
 			Status:   "pending",
 		}
 		dbcore.DB().Create(&replica)
 
-		baseURL := fmt.Sprintf("http://%s:%d/api/files/%s", node.IP, node.Port, fileID)
-		signedURL := transfer.GenerateSignedURL(baseURL, fileID, 5*time.Minute)
+		proxyURL := fmt.Sprintf("/api/proxy/upload/%s?node=%s", fileID, node.UUID)
 
 		targets = append(targets, Target{
-			NodeUUID: nodeUUID,
-			URL:      signedURL,
+			NodeUUID: node.UUID,
+			URL:      proxyURL,
 		})
 	}
 
@@ -186,24 +223,30 @@ func GetDownloadURL(c *gin.Context) {
 		return
 	}
 
-	// Find an online replica
+	// Find a stored replica on an online node.
 	var replica models.FileReplica
-	if err := dbcore.DB().Where("file_id = ? AND status = ?", fileID, "stored").First(&replica).Error; err != nil {
+	if err := dbcore.DB().
+		Table("file_replicas").
+		Select("file_replicas.*").
+		Joins("JOIN nodes ON nodes.uuid = file_replicas.node_uuid").
+		Where("file_replicas.file_id = ? AND file_replicas.status = ? AND nodes.status = ?", fileID, "stored", "online").
+		Order("file_replicas.id ASC").
+		First(&replica).Error; err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "no available replica"})
 		return
 	}
 
+	// Just need to verify the replica node is online; the proxy handler will do the actual signing.
 	var node models.Node
 	if err := dbcore.DB().Where("uuid = ? AND status = ?", replica.NodeUUID, "online").First(&node).Error; err != nil {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "replica node is offline"})
 		return
 	}
 
-	baseURL := fmt.Sprintf("http://%s:%d/api/files/%s", node.IP, node.Port, fileID)
-	signedURL := transfer.GenerateSignedURL(baseURL, fileID, 5*time.Minute)
+	proxyURL := fmt.Sprintf("/api/proxy/download/%s?node=%s", fileID, replica.NodeUUID)
 
 	c.JSON(http.StatusOK, gin.H{
-		"url":      signedURL,
+		"url":      proxyURL,
 		"filename": file.Name,
 		"size":     file.Size,
 	})

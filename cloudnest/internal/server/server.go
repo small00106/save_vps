@@ -3,6 +3,7 @@ package server
 import (
 	"io/fs"
 	"net/http"
+	"os"
 	"strings"
 
 	adminAPI "github.com/cloudnest/cloudnest/internal/api/admin"
@@ -72,6 +73,11 @@ func SetupRouter() *gin.Engine {
 			authed.DELETE("/files/:id", filesAPI.DeleteFile)
 			authed.PUT("/files/:id/move", filesAPI.MoveFile)
 			authed.GET("/files/search", filesAPI.Search)
+
+			// Proxy (data plane through Master for HTTPS compatibility)
+			authed.PUT("/proxy/upload/:file_id", filesAPI.ProxyUpload)
+			authed.GET("/proxy/download/:file_id", filesAPI.ProxyDownload)
+			authed.GET("/proxy/browse", filesAPI.ProxyBrowse)
 
 			// Dashboard WebSocket
 			authed.GET("/ws/dashboard", dashboardWS)
@@ -234,7 +240,11 @@ mkdir -p "$SCAN_DIRS"
 
 # Download agent binary
 echo "Downloading agent binary..."
-curl -sSL -o "${INSTALL_DIR}/cloudnest-agent" "${MASTER_URL}/download/agent/${OS}/${ARCH}"
+curl -sSLf -o "${INSTALL_DIR}/cloudnest-agent" "${MASTER_URL}/download/agent/${OS}/${ARCH}" || {
+    echo "Error: failed to download agent binary for ${OS}/${ARCH}"
+    echo "Supported: linux/amd64, linux/arm64"
+    exit 1
+}
 chmod +x "${INSTALL_DIR}/cloudnest-agent"
 
 # Register with master
@@ -286,6 +296,14 @@ func serveAgentBinary(c *gin.Context) {
 	// Look for binary in data directory
 	binaryName := "cloudnest-agent-" + osName + "-" + arch
 	binaryPath := "./data/binaries/" + binaryName
+
+	if _, err := os.Stat(binaryPath); os.IsNotExist(err) {
+		c.JSON(http.StatusNotFound, gin.H{
+			"error": "agent binary not found for " + osName + "/" + arch,
+			"hint":  "supported: linux/amd64, linux/arm64",
+		})
+		return
+	}
 
 	c.FileAttachment(binaryPath, "cloudnest-agent")
 }

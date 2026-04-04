@@ -2,6 +2,7 @@ package nodes
 
 import (
 	"net/http"
+	"sort"
 	"time"
 
 	"github.com/cloudnest/cloudnest/internal/cache"
@@ -83,11 +84,86 @@ func GetMetrics(c *gin.Context) {
 			Order("timestamp ASC").Find(&metrics)
 		c.JSON(http.StatusOK, metrics)
 	} else {
-		var metrics []models.NodeMetricCompact
-		dbcore.DB().Where("node_uuid = ? AND bucket_time > ?", uuid, since).
-			Order("bucket_time ASC").Find(&metrics)
-		c.JSON(http.StatusOK, metrics)
+		// Long ranges should include compacted history + recent raw data (last 4h)
+		// to avoid a visibility gap before compaction catches up.
+		recentSince := time.Now().Add(-4 * time.Hour)
+		if since.After(recentSince) {
+			recentSince = since
+		}
+		compactEnd := recentSince.Truncate(15 * time.Minute)
+
+		var compacted []models.NodeMetricCompact
+		compactQuery := dbcore.DB().Where("node_uuid = ? AND bucket_time > ?", uuid, since)
+		if compactEnd.After(since) {
+			compactQuery = compactQuery.Where("bucket_time < ?", compactEnd)
+		}
+		compactQuery.Order("bucket_time ASC").Find(&compacted)
+
+		var recentRaw []models.NodeMetric
+		dbcore.DB().Where("node_uuid = ? AND timestamp >= ?", uuid, recentSince).
+			Order("timestamp ASC").Find(&recentRaw)
+		recentBuckets := aggregateRawToCompact(recentRaw)
+
+		merged := make([]models.NodeMetricCompact, 0, len(compacted)+len(recentBuckets))
+		merged = append(merged, compacted...)
+		merged = append(merged, recentBuckets...)
+		c.JSON(http.StatusOK, merged)
 	}
+}
+
+func aggregateRawToCompact(raw []models.NodeMetric) []models.NodeMetricCompact {
+	if len(raw) == 0 {
+		return []models.NodeMetricCompact{}
+	}
+
+	type agg struct {
+		cpuSum, memSum, diskSum float64
+		netInSum, netOutSum     int64
+		count                   int64
+	}
+
+	nodeUUID := raw[0].NodeUUID
+	buckets := make(map[time.Time]*agg)
+	for _, m := range raw {
+		t := m.Timestamp.Truncate(15 * time.Minute)
+		a, ok := buckets[t]
+		if !ok {
+			a = &agg{}
+			buckets[t] = a
+		}
+		a.cpuSum += m.CPUPercent
+		a.memSum += m.MemPercent
+		a.diskSum += m.DiskPercent
+		a.netInSum += m.NetInSpeed
+		a.netOutSum += m.NetOutSpeed
+		a.count++
+	}
+
+	times := make([]time.Time, 0, len(buckets))
+	for t := range buckets {
+		times = append(times, t)
+	}
+	sort.Slice(times, func(i, j int) bool { return times[i].Before(times[j]) })
+
+	out := make([]models.NodeMetricCompact, 0, len(times))
+	for _, t := range times {
+		a := buckets[t]
+		if a.count == 0 {
+			continue
+		}
+		n := float64(a.count)
+		out = append(out, models.NodeMetricCompact{
+			NodeUUID:    nodeUUID,
+			CPUPercent:  a.cpuSum / n,
+			MemPercent:  a.memSum / n,
+			DiskPercent: a.diskSum / n,
+			NetInSpeed:  a.netInSum / a.count,
+			NetOutSpeed: a.netOutSum / a.count,
+			BucketTime:  t,
+		})
+	}
+
+	return out
 }
 
 // GetTraffic handles GET /api/nodes/:uuid/traffic

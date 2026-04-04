@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -19,7 +20,7 @@ func init() {
 }
 
 // validateSignature checks HMAC-SHA256 signature, same algorithm as master's transfer.signer.
-func validateSignature(fileID, expiresStr, sig string) bool {
+func validateSignature(resourceID, method, expiresStr, sig string) bool {
 	expires, err := strconv.ParseInt(expiresStr, 10, 64)
 	if err != nil {
 		return false
@@ -28,7 +29,10 @@ func validateSignature(fileID, expiresStr, sig string) bool {
 		return false
 	}
 
-	payload := fmt.Sprintf("%s:%d", fileID, expires)
+	if method == "" {
+		method = "GET"
+	}
+	payload := fmt.Sprintf("%s:%s:%d", strings.ToUpper(method), resourceID, expires)
 	mac := hmac.New(sha256.New, []byte(signingSecret))
 	mac.Write([]byte(payload))
 	expected := hex.EncodeToString(mac.Sum(nil))

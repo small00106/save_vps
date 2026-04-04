@@ -218,8 +218,8 @@ export function getNode(uuid: string) {
   return api.get<{ node: Node; latest_metric: NodeMetric | null }>(`/nodes/${uuid}`);
 }
 
-export function getNodeMetrics(uuid: string, range = "1h") {
-  return api.get<NodeMetric[]>(`/nodes/${uuid}/metrics?range=${range}`);
+export function getNodeMetrics(uuid: string, timeRange = "1h") {
+  return api.get<(NodeMetric | NodeMetricCompact)[]>(`/nodes/${uuid}/metrics?range=${timeRange}`);
 }
 
 export function getNodeTraffic(uuid: string) {
@@ -260,6 +260,14 @@ export function listFiles(path = "/") {
 
 export function searchFiles(q: string) {
   return api.get<SearchResult[]>(`/files/search?q=${encodeURIComponent(q)}`);
+}
+
+export function createDir(path: string, name: string) {
+  return api.post<StoredFile>("/files/mkdir", { path, name });
+}
+
+export function deleteFile(id: string) {
+  return api.delete<{ message: string }>(`/files/${id}`);
 }
 
 // ========================

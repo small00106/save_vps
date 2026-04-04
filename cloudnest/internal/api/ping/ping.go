@@ -3,6 +3,7 @@ package ping
 import (
 	"encoding/json"
 	"net/http"
+	"strconv"
 
 	"github.com/cloudnest/cloudnest/internal/database/dbcore"
 	"github.com/cloudnest/cloudnest/internal/database/models"
@@ -55,6 +56,19 @@ func GetResults(c *gin.Context) {
 // DeleteTask handles DELETE /api/ping/tasks/:id
 func DeleteTask(c *gin.Context) {
 	id := c.Param("id")
+
+	// Ask all connected agents to stop this task immediately.
+	if taskID, err := strconv.ParseUint(id, 10, 64); err == nil {
+		params, _ := json.Marshal(map[string]uint{
+			"task_id": uint(taskID),
+		})
+		ws.GetHub().BroadcastToAgents(&ws.RPCMessage{
+			JSONRPC: "2.0",
+			Method:  "master.stopPing",
+			Params:  params,
+		})
+	}
+
 	dbcore.DB().Delete(&models.PingTask{}, id)
 	dbcore.DB().Where("task_id = ?", id).Delete(&models.PingResult{})
 	c.JSON(http.StatusOK, gin.H{"message": "deleted"})

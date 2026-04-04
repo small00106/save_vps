@@ -30,7 +30,7 @@ func HandleTerminal(c *gin.Context) {
 	// Build signed URL for agent terminal
 	terminalID := "terminal:" + nodeUUID
 	baseURL := fmt.Sprintf("ws://%s:%d/api/terminal", node.IP, node.Port)
-	signedURL := transfer.GenerateSignedURL(baseURL, terminalID, 5*time.Minute)
+	signedURL := transfer.GenerateSignedURL(baseURL, terminalID, http.MethodGet, 5*time.Minute)
 	signedURL += "&id=" + terminalID
 
 	agentConn, _, err := websocket.DefaultDialer.Dial(signedURL, nil)
