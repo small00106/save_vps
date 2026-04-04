@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
@@ -38,8 +39,17 @@ func init() {
 }
 
 func runServer(cmd *cobra.Command, args []string) {
+	resolvedDBType, resolvedDBDSN, warning, err := resolveDBConfig("", dbType, dbDSN)
+	if err != nil {
+		log.Fatalf("Failed to resolve database config: %v", err)
+	}
+	if warning != "" {
+		log.Printf("WARNING: %s", warning)
+	}
+	log.Printf("Using database config: dbType=%s dbDSN=%s", resolvedDBType, resolvedDBDSN)
+
 	// 1. Initialize database
-	if err := dbcore.Init(dbType, dbDSN); err != nil {
+	if err := dbcore.Init(resolvedDBType, resolvedDBDSN); err != nil {
 		log.Fatalf("Failed to initialize database: %v", err)
 	}
 	log.Println("Database initialized")
@@ -94,4 +104,44 @@ func getEnv(key, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+func resolveDBConfig(executablePath, configuredType, configuredDSN string) (string, string, string, error) {
+	resolvedType := "sqlite"
+	if configuredType == "mysql" {
+		resolvedType = "mysql"
+	}
+
+	if resolvedType != "sqlite" || configuredDSN == "" || configuredDSN == ":memory:" || filepath.IsAbs(configuredDSN) {
+		return resolvedType, configuredDSN, "", nil
+	}
+
+	execDir, err := executableDir(executablePath)
+	if err != nil {
+		return "", "", "", err
+	}
+
+	resolvedDSN, err := filepath.Abs(filepath.Join(execDir, configuredDSN))
+	if err != nil {
+		return "", "", "", fmt.Errorf("resolve sqlite db path %q: %w", configuredDSN, err)
+	}
+
+	warning := fmt.Sprintf("sqlite db-dsn %q is relative; resolved against executable directory to %q", configuredDSN, resolvedDSN)
+	return resolvedType, resolvedDSN, warning, nil
+}
+
+func executableDir(executablePath string) (string, error) {
+	if executablePath == "" {
+		var err error
+		executablePath, err = os.Executable()
+		if err != nil {
+			return "", fmt.Errorf("resolve executable path: %w", err)
+		}
+	}
+
+	execDir := filepath.Dir(executablePath)
+	if execDir == "." || execDir == "" {
+		return "", fmt.Errorf("resolve executable directory from %q", executablePath)
+	}
+	return execDir, nil
 }
