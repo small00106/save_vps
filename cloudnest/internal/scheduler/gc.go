@@ -46,7 +46,10 @@ func gcDeletingFiles() {
 
 		// Retry sending delete to agents that still have replicas
 		for _, r := range replicas {
-			params, _ := json.Marshal(map[string]string{"file_id": file.FileID})
+			params, _ := json.Marshal(map[string]string{
+				"file_id":    file.FileID,
+				"store_path": r.StorePath,
+			})
 			hub.SendToAgent(r.NodeUUID, &ws.RPCMessage{
 				JSONRPC: "2.0",
 				Method:  "master.deleteFile",

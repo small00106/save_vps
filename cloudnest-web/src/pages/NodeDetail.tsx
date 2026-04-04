@@ -1,23 +1,42 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import {
-  Loader2, Folder, FileText, ChevronRight, Download, ArrowLeft,
+  ArrowLeft,
+  ChevronRight,
+  Download,
+  FileText,
+  Folder,
+  Loader2,
+  RefreshCw,
+  Upload,
 } from "lucide-react";
 import {
-  getNode,
-  getNodeMetrics,
-  getNodeFiles,
-  getNodeDownloadURL,
-  getNodeTraffic,
-  updateNodeTags,
+  ApiError,
   execCommand,
   getCommandTask,
+  getNode,
+  getNodeDownloadURL,
+  getNodeFiles,
+  getNodeMetrics,
+  getNodeTraffic,
+  initUpload,
   type CommandTask,
+  type DownloadResponse,
   type FileEntry,
   type Node,
+  type NodeUploadResponse,
+  updateNodeTags,
 } from "../api/client";
+import { triggerDownload } from "../utils/download";
 import {
-  ResponsiveContainer, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend,
+  ResponsiveContainer,
+  LineChart,
+  Line,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  Legend,
 } from "recharts";
 
 function formatBytes(bytes: number, decimals = 1): string {
@@ -38,6 +57,52 @@ function parseTagsToInput(tags: string): string {
     // ignore
   }
   return "";
+}
+
+function formatPath(path: string): string {
+  return path === "/" ? "/" : path.replace(/\/+$/, "");
+}
+
+function parentPath(path: string): string {
+  const normalized = formatPath(path);
+  if (normalized === "/") return "/";
+  const idx = normalized.lastIndexOf("/");
+  return idx <= 0 ? "/" : normalized.slice(0, idx);
+}
+
+function extractDownloadFilename(res: DownloadResponse): string {
+  return res.filename?.trim() ? res.filename : "download";
+}
+
+function extractUploadURL(res: NodeUploadResponse): string | null {
+  if (res.url?.trim()) return res.url;
+  if (res.target?.url?.trim()) return res.target.url;
+  if (res.targets?.[0]?.url?.trim()) return res.targets[0].url;
+  return null;
+}
+
+function uploadFileToUrl(
+  url: string,
+  file: File,
+  onProgress: (pct: number) => void,
+): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("PUT", url, true);
+    xhr.upload.onprogress = (e) => {
+      if (e.lengthComputable) {
+        onProgress(Math.round((e.loaded / e.total) * 100));
+      }
+    };
+    xhr.onload = () => (xhr.status >= 200 && xhr.status < 300 ? resolve() : reject(new Error(`HTTP ${xhr.status}`)));
+    xhr.onerror = () => reject(new Error("Network error"));
+    xhr.send(file);
+  });
+}
+
+function getErrorMessage(error: unknown): string {
+  if (error instanceof Error) return error.message;
+  return "Operation failed";
 }
 
 type MetricPoint = {
@@ -63,6 +128,12 @@ export default function NodeDetail() {
   const [currentPath, setCurrentPath] = useState("/");
   const [files, setFiles] = useState<FileEntry[]>([]);
   const [filesLoading, setFilesLoading] = useState(false);
+  const [filesRefreshTick, setFilesRefreshTick] = useState(0);
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [uploading, setUploading] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState(0);
+  const [uploadError, setUploadError] = useState("");
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const [tagsInput, setTagsInput] = useState("");
   const [savingTags, setSavingTags] = useState(false);
@@ -89,6 +160,18 @@ export default function NodeDetail() {
   }, [uuid]);
 
   useEffect(() => {
+    setCurrentPath("/");
+    setFiles([]);
+    setFilesRefreshTick(0);
+    setSelectedFile(null);
+    setUploadProgress(0);
+    setUploadError("");
+    if (fileInputRef.current) {
+      fileInputRef.current.value = "";
+    }
+  }, [uuid]);
+
+  useEffect(() => {
     if (!uuid || tab !== "metrics") return;
     setMetricsLoading(true);
     getNodeMetrics(uuid, range)
@@ -107,7 +190,15 @@ export default function NodeDetail() {
       .then((data) => setFiles(Array.isArray(data) ? data : []))
       .catch(() => setFiles([]))
       .finally(() => setFilesLoading(false));
-  }, [uuid, currentPath, tab]);
+  }, [uuid, currentPath, tab, filesRefreshTick]);
+
+  useEffect(() => {
+    if (!uuid || tab !== "files") return;
+    const timer = window.setInterval(() => {
+      setFilesRefreshTick((value) => value + 1);
+    }, 10000);
+    return () => window.clearInterval(timer);
+  }, [uuid, tab]);
 
   useEffect(() => {
     if (!uuid) return;
@@ -131,24 +222,33 @@ export default function NodeDetail() {
     const parts = currentPath.split("/").filter(Boolean);
     const crumbs = [{ label: "Root", path: "/" }];
     let acc = "";
-    for (const p of parts) {
-      acc += "/" + p;
-      crumbs.push({ label: p, path: acc });
+    for (const part of parts) {
+      acc += "/" + part;
+      crumbs.push({ label: part, path: acc });
     }
     return crumbs;
   }, [currentPath]);
 
+  const handleDownload = async (path: string) => {
+    if (!uuid) return;
+    const res = await getNodeDownloadURL(uuid, path);
+    triggerDownload(res.url, extractDownloadFilename(res));
+  };
+
   const handleFileClick = async (entry: FileEntry) => {
     if (entry.is_dir) {
       setCurrentPath(entry.path);
-    } else if (uuid) {
-      try {
-        const res = await getNodeDownloadURL(uuid, entry.path);
-        window.open(res.url, "_blank");
-      } catch {
-        // ignore
-      }
+      return;
     }
+    try {
+      await handleDownload(entry.path);
+    } catch {
+      // ignore
+    }
+  };
+
+  const handleRefreshFiles = () => {
+    setFilesRefreshTick((value) => value + 1);
   };
 
   const handleSaveTags = async () => {
@@ -166,6 +266,61 @@ export default function NodeDetail() {
       // ignore
     } finally {
       setSavingTags(false);
+    }
+  };
+
+  const uploadToCurrentDirectory = async (overwrite: boolean) => {
+    if (!uuid || !selectedFile) return;
+    const res = await initUpload({
+      name: selectedFile.name,
+      size: selectedFile.size,
+      path: currentPath,
+      node_uuid: uuid,
+      overwrite,
+    });
+    const uploadURL = extractUploadURL(res);
+    if (!uploadURL) {
+      throw new Error("upload url missing");
+    }
+    await uploadFileToUrl(uploadURL, selectedFile, setUploadProgress);
+  };
+
+  const handleUpload = async () => {
+    if (!selectedFile || !uuid) return;
+    setUploading(true);
+    setUploadError("");
+    setUploadProgress(0);
+
+    try {
+      await uploadToCurrentDirectory(false);
+      setSelectedFile(null);
+      if (fileInputRef.current) {
+        fileInputRef.current.value = "";
+      }
+      setFilesRefreshTick((value) => value + 1);
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 409) {
+        const confirmed = window.confirm("当前目录已存在同名文件，是否覆盖？");
+        if (confirmed) {
+          try {
+            setUploadProgress(0);
+            await uploadToCurrentDirectory(true);
+            setSelectedFile(null);
+            if (fileInputRef.current) {
+              fileInputRef.current.value = "";
+            }
+            setFilesRefreshTick((value) => value + 1);
+            return;
+          } catch (retryError) {
+            setUploadError(getErrorMessage(retryError));
+            return;
+          }
+        }
+        return;
+      }
+      setUploadError(getErrorMessage(error));
+    } finally {
+      setUploading(false);
     }
   };
 
@@ -305,15 +460,15 @@ export default function NodeDetail() {
       </div>
 
       <div className="flex gap-1 bg-[#18181b] border border-[#27272a] rounded-lg p-1 w-fit">
-        {(["metrics", "files"] as const).map((t) => (
+        {(["metrics", "files"] as const).map((value) => (
           <button
-            key={t}
-            onClick={() => setTab(t)}
+            key={value}
+            onClick={() => setTab(value)}
             className={`px-4 py-1.5 rounded-md text-sm font-medium transition-colors ${
-              tab === t ? "bg-[#27272a] text-[#fafafa]" : "text-[#71717a] hover:text-[#a1a1aa]"
+              tab === value ? "bg-[#27272a] text-[#fafafa]" : "text-[#71717a] hover:text-[#a1a1aa]"
             }`}
           >
-            {t === "metrics" ? "Metrics" : "Files"}
+            {value === "metrics" ? "Metrics" : "Files"}
           </button>
         ))}
       </div>
@@ -372,69 +527,173 @@ export default function NodeDetail() {
       )}
 
       {tab === "files" && (
-        <div className="bg-[#18181b] border border-[#27272a] rounded-xl overflow-hidden">
-          <div className="flex items-center gap-1 px-4 py-3 border-b border-[#27272a] text-sm overflow-x-auto">
-            {breadcrumbs.map((crumb, i) => (
-              <span key={crumb.path} className="flex items-center gap-1 shrink-0">
-                {i > 0 && <ChevronRight className="w-3 h-3 text-[#71717a]" />}
-                <button
-                  onClick={() => setCurrentPath(crumb.path)}
-                  className={`hover:text-[#3b82f6] transition-colors ${
-                    i === breadcrumbs.length - 1 ? "text-[#fafafa]" : "text-[#71717a]"
-                  }`}
-                >
-                  {crumb.label}
-                </button>
-              </span>
-            ))}
+        <div className="space-y-4">
+          <div className="bg-[#18181b] border border-[#27272a] rounded-xl p-4 space-y-4">
+            <div className="flex items-center justify-between gap-3 flex-wrap">
+              <div>
+                <p className="text-sm font-medium text-[#fafafa]">Current Directory</p>
+                <p className="text-xs text-[#71717a] break-all">{currentPath}</p>
+              </div>
+              <button
+                onClick={handleRefreshFiles}
+                className="flex items-center gap-2 h-8 px-3 rounded-lg bg-[#18181b] border border-[#27272a] hover:bg-[#232329] text-[#fafafa] text-xs font-medium transition-colors"
+              >
+                <RefreshCw className="w-4 h-4" />
+                Refresh
+              </button>
+            </div>
+
+            <div className="grid gap-3 sm:grid-cols-[1fr_auto] sm:items-end">
+              <div className="space-y-2">
+                <label className="block text-xs text-[#a1a1aa]">Upload File</label>
+                <div className="flex items-center gap-3 rounded-lg border border-dashed border-[#27272a] bg-[#09090b] px-3 py-2">
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    className="hidden"
+                    onChange={(e) => {
+                      const file = e.target.files?.[0] || null;
+                      setSelectedFile(file);
+                      setUploadError("");
+                    }}
+                  />
+                  <button
+                    onClick={() => fileInputRef.current?.click()}
+                    className="flex items-center gap-2 rounded-lg bg-[#18181b] border border-[#27272a] px-3 py-1.5 text-sm text-[#fafafa] hover:bg-[#232329] transition-colors"
+                  >
+                    <Upload className="w-4 h-4" />
+                    Choose File
+                  </button>
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm text-[#fafafa] truncate">
+                      {selectedFile ? selectedFile.name : "No file selected"}
+                    </p>
+                    {selectedFile && (
+                      <p className="text-xs text-[#71717a]">{formatBytes(selectedFile.size)}</p>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              <button
+                onClick={handleUpload}
+                disabled={uploading || !selectedFile}
+                className="h-10 px-4 rounded-lg bg-[#3b82f6] hover:bg-blue-600 text-white text-sm font-medium transition-colors disabled:opacity-50"
+              >
+                {uploading ? "Uploading..." : "Upload Here"}
+              </button>
+            </div>
+
+            {uploadError && (
+              <div className="rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-red-300">
+                {uploadError}
+              </div>
+            )}
+
+            {uploading && (
+              <div className="space-y-2">
+                <div className="flex items-center justify-between text-xs text-[#a1a1aa]">
+                  <span>Upload Progress</span>
+                  <span>{uploadProgress}%</span>
+                </div>
+                <div className="h-2 rounded-full bg-[#27272a] overflow-hidden">
+                  <div
+                    className="h-full rounded-full bg-[#3b82f6] transition-all duration-200"
+                    style={{ width: `${uploadProgress}%` }}
+                  />
+                </div>
+              </div>
+            )}
           </div>
 
-          {filesLoading ? (
-            <div className="flex items-center justify-center h-48">
-              <Loader2 className="w-5 h-5 text-[#3b82f6] animate-spin" />
-            </div>
-          ) : files.length === 0 ? (
-            <div className="flex items-center justify-center h-48 text-[#71717a] text-sm">
-              Empty directory
-            </div>
-          ) : (
-            <div className="divide-y divide-[#27272a]">
-              {currentPath !== "/" && (
-                <button
-                  onClick={() => {
-                    const parent = currentPath.split("/").slice(0, -1).join("/") || "/";
-                    setCurrentPath(parent);
-                  }}
-                  className="flex items-center gap-3 w-full px-4 py-2.5 hover:bg-[#232329] transition-colors text-left"
-                >
-                  <ArrowLeft className="w-4 h-4 text-[#71717a]" />
-                  <span className="text-sm text-[#a1a1aa]">..</span>
-                </button>
-              )}
-              {[...files]
-                .sort((a, b) => (a.is_dir === b.is_dir ? a.name.localeCompare(b.name) : a.is_dir ? -1 : 1))
-                .map((entry) => (
+          <div className="bg-[#18181b] border border-[#27272a] rounded-xl overflow-hidden">
+            <div className="flex items-center gap-1 px-4 py-3 border-b border-[#27272a] text-sm overflow-x-auto">
+              {breadcrumbs.map((crumb, index) => (
+                <span key={crumb.path} className="flex items-center gap-1 shrink-0">
+                  {index > 0 && <ChevronRight className="w-3 h-3 text-[#71717a]" />}
                   <button
-                    key={entry.path}
-                    onClick={() => handleFileClick(entry)}
-                    className="flex items-center gap-3 w-full px-4 py-2.5 hover:bg-[#232329] transition-colors text-left group"
+                    onClick={() => setCurrentPath(crumb.path)}
+                    className={`hover:text-[#3b82f6] transition-colors ${
+                      index === breadcrumbs.length - 1 ? "text-[#fafafa]" : "text-[#71717a]"
+                    }`}
                   >
-                    {entry.is_dir ? (
-                      <Folder className="w-4 h-4 text-[#3b82f6] shrink-0" />
-                    ) : (
-                      <FileText className="w-4 h-4 text-[#71717a] shrink-0" />
-                    )}
-                    <span className="text-sm text-[#fafafa] truncate flex-1">{entry.name}</span>
-                    {!entry.is_dir && (
-                      <span className="text-xs text-[#71717a] shrink-0">{formatBytes(entry.size)}</span>
-                    )}
-                    {!entry.is_dir && (
-                      <Download className="w-3 h-3 text-[#71717a] opacity-0 group-hover:opacity-100 transition-opacity shrink-0" />
-                    )}
+                    {crumb.label}
                   </button>
-                ))}
+                </span>
+              ))}
             </div>
-          )}
+
+            {filesLoading ? (
+              <div className="flex items-center justify-center h-48">
+                <Loader2 className="w-5 h-5 text-[#3b82f6] animate-spin" />
+              </div>
+            ) : files.length === 0 ? (
+              <div className="flex items-center justify-center h-48 text-[#71717a] text-sm">
+                Empty directory
+              </div>
+            ) : (
+              <div className="divide-y divide-[#27272a]">
+                {currentPath !== "/" && (
+                  <button
+                    onClick={() => setCurrentPath(parentPath(currentPath))}
+                    className="flex items-center gap-3 w-full px-4 py-2.5 hover:bg-[#232329] transition-colors text-left"
+                  >
+                    <ArrowLeft className="w-4 h-4 text-[#71717a]" />
+                    <span className="text-sm text-[#a1a1aa]">..</span>
+                  </button>
+                )}
+                {[...files]
+                  .sort((a, b) => (a.is_dir === b.is_dir ? a.name.localeCompare(b.name) : a.is_dir ? -1 : 1))
+                  .map((entry) => (
+                    <div
+                      key={entry.path}
+                      className="flex items-center gap-3 w-full px-4 py-2.5 hover:bg-[#232329] transition-colors group"
+                    >
+                      <button
+                        onClick={() => handleFileClick(entry)}
+                        className="flex items-center gap-3 flex-1 min-w-0 text-left"
+                      >
+                        {entry.is_dir ? (
+                          <Folder className="w-4 h-4 text-[#3b82f6] shrink-0" />
+                        ) : (
+                          <FileText className="w-4 h-4 text-[#71717a] shrink-0" />
+                        )}
+                        <span className="text-sm text-[#fafafa] truncate">{entry.name}</span>
+                        {!entry.is_dir && (
+                          <span className="text-xs text-[#71717a] shrink-0 ml-auto">
+                            {formatBytes(entry.size)}
+                          </span>
+                        )}
+                      </button>
+                      <div className="flex items-center gap-1 shrink-0">
+                        {entry.is_dir && (
+                          <button
+                            onClick={() => {
+                              void handleDownload(entry.path);
+                            }}
+                            className="p-1 rounded text-[#71717a] hover:text-[#3b82f6] opacity-0 group-hover:opacity-100 transition-all"
+                            title="Download folder"
+                          >
+                            <Download className="w-3.5 h-3.5" />
+                          </button>
+                        )}
+                        {!entry.is_dir && (
+                          <button
+                            onClick={() => {
+                              void handleDownload(entry.path);
+                            }}
+                            className="p-1 rounded text-[#71717a] hover:text-[#3b82f6] opacity-0 group-hover:opacity-100 transition-all"
+                            title="Download file"
+                          >
+                            <Download className="w-3.5 h-3.5" />
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+              </div>
+            )}
+          </div>
         </div>
       )}
     </div>

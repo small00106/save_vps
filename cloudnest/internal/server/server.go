@@ -196,7 +196,7 @@ SERVICE_NAME="cloudnest-agent"
 REG_TOKEN=""
 SIGNING_SECRET=""
 PORT=8801
-SCAN_DIRS="/data"
+SCAN_DIRS="${HOME}/data_save/files"
 
 # Parse arguments
 while [[ $# -gt 0 ]]; do

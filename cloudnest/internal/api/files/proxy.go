@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 
 	"github.com/cloudnest/cloudnest/internal/database/dbcore"
@@ -14,6 +15,16 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+func writeProxyResponse(c *gin.Context, resp *http.Response) {
+	for k, vs := range resp.Header {
+		for _, v := range vs {
+			c.Writer.Header().Add(k, v)
+		}
+	}
+	c.Status(resp.StatusCode)
+	_, _ = io.Copy(c.Writer, resp.Body)
+}
+
 // resolveNode looks up an online node by UUID.
 func resolveNode(uuid string) (*models.Node, error) {
 	var node models.Node
@@ -21,6 +32,18 @@ func resolveNode(uuid string) (*models.Node, error) {
 		return nil, err
 	}
 	return &node, nil
+}
+
+func signedUploadResource(fileID, path, name, overwrite string) string {
+	cleanPath := strings.TrimSpace(path)
+	cleanName := strings.TrimSpace(name)
+	if cleanName == "" && cleanPath == "" && strings.TrimSpace(overwrite) == "" {
+		return fileID
+	}
+	if cleanPath == "" {
+		cleanPath = "/"
+	}
+	return fmt.Sprintf("%s|%s|%s|%t", fileID, cleanPath, cleanName, strings.EqualFold(strings.TrimSpace(overwrite), "true"))
 }
 
 // ProxyUpload handles PUT /api/proxy/upload/:file_id?node=<uuid>
@@ -41,7 +64,21 @@ func ProxyUpload(c *gin.Context) {
 
 	// Build signed URL for the Agent
 	agentBase := fmt.Sprintf("http://%s:%d/api/files/%s", node.IP, node.Port, fileID)
-	agentURL := transfer.GenerateSignedURL(agentBase, fileID, http.MethodPut, 5*time.Minute)
+	agentURL := transfer.GenerateSignedURL(
+		agentBase,
+		signedUploadResource(fileID, c.Query("path"), c.Query("name"), c.Query("overwrite")),
+		http.MethodPut,
+		5*time.Minute,
+	)
+	if path := c.Query("path"); path != "" {
+		agentURL += "&path=" + url.QueryEscape(path)
+	}
+	if name := c.Query("name"); name != "" {
+		agentURL += "&name=" + url.QueryEscape(name)
+	}
+	if overwrite := c.Query("overwrite"); overwrite != "" {
+		agentURL += "&overwrite=" + url.QueryEscape(overwrite)
+	}
 
 	// Create the upstream request, streaming the body directly (no buffering)
 	req, err := http.NewRequestWithContext(c.Request.Context(), http.MethodPut, agentURL, c.Request.Body)
@@ -62,14 +99,10 @@ func ProxyUpload(c *gin.Context) {
 	}
 	defer resp.Body.Close()
 
-	// Forward the Agent's response back to the browser
-	c.Status(resp.StatusCode)
-	for k, vs := range resp.Header {
-		for _, v := range vs {
-			c.Writer.Header().Add(k, v)
-		}
-	}
-	io.Copy(c.Writer, resp.Body)
+	// Forward the Agent's response back to the browser.
+	// Headers must be copied before status is written, otherwise attachment
+	// headers may be dropped and the browser can open files inline.
+	writeProxyResponse(c, resp)
 }
 
 // ProxyDownload handles GET /api/proxy/download/:file_id?node=<uuid>
@@ -90,6 +123,9 @@ func ProxyDownload(c *gin.Context) {
 
 	agentBase := fmt.Sprintf("http://%s:%d/api/files/%s", node.IP, node.Port, fileID)
 	agentURL := transfer.GenerateSignedURL(agentBase, fileID, http.MethodGet, 5*time.Minute)
+	if filename := c.Query("filename"); filename != "" {
+		agentURL += "&filename=" + url.QueryEscape(filename)
+	}
 
 	resp, err := http.Get(agentURL)
 	if err != nil {
@@ -99,13 +135,7 @@ func ProxyDownload(c *gin.Context) {
 	}
 	defer resp.Body.Close()
 
-	c.Status(resp.StatusCode)
-	for k, vs := range resp.Header {
-		for _, v := range vs {
-			c.Writer.Header().Add(k, v)
-		}
-	}
-	io.Copy(c.Writer, resp.Body)
+	writeProxyResponse(c, resp)
 }
 
 // ProxyBrowse handles GET /api/proxy/browse?node=<uuid>&path=<path>
@@ -127,6 +157,12 @@ func ProxyBrowse(c *gin.Context) {
 	agentBase := fmt.Sprintf("http://%s:%d/api/browse", node.IP, node.Port)
 	agentURL := transfer.GenerateSignedURL(agentBase, filePath, http.MethodGet, 5*time.Minute)
 	agentURL += "&path=" + url.QueryEscape(filePath)
+	if filename := c.Query("filename"); filename != "" {
+		agentURL += "&filename=" + url.QueryEscape(filename)
+	}
+	if archive := c.Query("archive"); archive != "" {
+		agentURL += "&archive=" + url.QueryEscape(archive)
+	}
 
 	resp, err := http.Get(agentURL)
 	if err != nil {
@@ -136,11 +172,5 @@ func ProxyBrowse(c *gin.Context) {
 	}
 	defer resp.Body.Close()
 
-	c.Status(resp.StatusCode)
-	for k, vs := range resp.Header {
-		for _, v := range vs {
-			c.Writer.Header().Add(k, v)
-		}
-	}
-	io.Copy(c.Writer, resp.Body)
+	writeProxyResponse(c, resp)
 }

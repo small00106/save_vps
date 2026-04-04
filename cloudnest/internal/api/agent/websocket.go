@@ -264,20 +264,28 @@ func handleFileTree(uuid string, params json.RawMessage) {
 
 func handleFileStored(uuid string, params json.RawMessage) {
 	var data struct {
-		FileID string `json:"file_id"`
+		FileID       string `json:"file_id"`
+		StorePath    string `json:"store_path"`
+		RelativePath string `json:"relative_path"`
 	}
 	if err := json.Unmarshal(params, &data); err != nil {
 		return
 	}
 
+	updates := map[string]interface{}{
+		"status": "stored",
+	}
+	if strings.TrimSpace(data.StorePath) != "" {
+		updates["store_path"] = data.StorePath
+	}
 	dbcore.DB().Model(&models.FileReplica{}).
 		Where("file_id = ? AND node_uuid = ?", data.FileID, uuid).
-		Update("status", "stored")
+		Updates(updates)
 
-	// Check if all replicas are stored
+	// Once no replica is still pending upload, the file is ready to serve.
 	var pendingCount int64
 	dbcore.DB().Model(&models.FileReplica{}).
-		Where("file_id = ? AND status != ?", data.FileID, "stored").
+		Where("file_id = ? AND status IN ?", data.FileID, []string{"pending", "uploading"}).
 		Count(&pendingCount)
 
 	if pendingCount == 0 {

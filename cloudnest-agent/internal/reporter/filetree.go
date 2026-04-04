@@ -25,12 +25,20 @@ func ScanDirectories(dirs []string) []FileEntry {
 	var entries []FileEntry
 
 	for _, dir := range dirs {
-		filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
+		root := filepath.Clean(dir)
+		filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+			if err != nil {
+				return nil
+			}
+			if filepath.Clean(path) == root {
+				return nil
+			}
+			rel, err := filepath.Rel(root, path)
 			if err != nil {
 				return nil
 			}
 			entries = append(entries, FileEntry{
-				Path:    path,
+				Path:    "/" + filepath.ToSlash(rel),
 				Name:    info.Name(),
 				Size:    info.Size(),
 				IsDir:   info.IsDir(),

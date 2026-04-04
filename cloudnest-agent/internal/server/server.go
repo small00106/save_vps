@@ -1,22 +1,35 @@
 package server
 
 import (
+	"archive/zip"
+	"fmt"
 	"io"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 
+	"github.com/cloudnest/cloudnest-agent/internal/storage"
 	"github.com/cloudnest/cloudnest-agent/internal/terminal"
 	"github.com/gin-gonic/gin"
 )
 
 // OnFileStored is called after a file is successfully uploaded.
 // Set by agent.go to notify master via WS.
-var OnFileStored func(fileID string)
+type StoredFileEvent struct {
+	FileID       string
+	RelativePath string
+	StorePath    string
+}
+
+var OnFileStored func(event StoredFileEvent)
 
 // Start launches the data plane HTTP server.
 func Start(addr string, rateLimit int64) error {
+	if err := storage.EnsureDataDirs(); err != nil {
+		return err
+	}
+
 	gin.SetMode(gin.ReleaseMode)
 	r := gin.New()
 	r.Use(gin.Recovery())
@@ -44,21 +57,23 @@ func validateSignedURL() gin.HandlerFunc {
 		expires := c.Query("expires")
 		sig := c.Query("sig")
 
-		// Determine the signed identifier: file_id param, path query, or id query
-		fileID := c.Param("file_id")
-		if fileID == "" {
-			fileID = c.Query("path")
+		resourceID := c.Param("file_id")
+		if resourceID != "" && c.Request.Method == http.MethodPut {
+			resourceID = signedUploadResource(resourceID, c.Query("path"), c.Query("name"), c.Query("overwrite"))
 		}
-		if fileID == "" {
-			fileID = c.Query("id")
+		if resourceID == "" {
+			resourceID = c.Query("path")
+		}
+		if resourceID == "" {
+			resourceID = c.Query("id")
 		}
 
-		if fileID == "" || expires == "" || sig == "" {
+		if resourceID == "" || expires == "" || sig == "" {
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "missing signature params"})
 			return
 		}
 
-		if !validateSignature(fileID, c.Request.Method, expires, sig) {
+		if !validateSignature(resourceID, c.Request.Method, expires, sig) {
 			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "invalid or expired signature"})
 			return
 		}
@@ -69,15 +84,54 @@ func validateSignedURL() gin.HandlerFunc {
 
 func handleUpload(c *gin.Context) {
 	fileID := c.Param("file_id")
-
-	dir := filepath.Join("/data/files", fileID[:2])
-	if err := os.MkdirAll(dir, 0755); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create directory"})
+	if len(fileID) < 2 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid file_id"})
 		return
 	}
 
-	filePath := filepath.Join(dir, fileID)
-	f, err := os.Create(filePath)
+	name := strings.TrimSpace(c.Query("name"))
+	overwrite := strings.EqualFold(c.Query("overwrite"), "true")
+
+	filePath := ""
+	relativePath := ""
+	var err error
+	if name == "" {
+		var dir string
+		dir, err = storage.EnsureShardDir(fileID)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create directory"})
+			return
+		}
+		filePath = filepath.Join(dir, fileID)
+	} else {
+		filePath, relativePath, err = storage.JoinManagedFilePath(c.DefaultQuery("path", "/"), name)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		if err := os.MkdirAll(filepath.Dir(filePath), 0755); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create directory"})
+			return
+		}
+		if !overwrite {
+			if _, err := os.Stat(filePath); err == nil {
+				c.JSON(http.StatusConflict, gin.H{"error": "file already exists"})
+				return
+			} else if !os.IsNotExist(err) {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to stat target"})
+				return
+			}
+		}
+	}
+
+	flags := os.O_CREATE | os.O_WRONLY
+	if overwrite || name == "" {
+		flags |= os.O_TRUNC
+	} else {
+		flags |= os.O_EXCL
+	}
+
+	f, err := os.OpenFile(filePath, flags, 0644)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create file"})
 		return
@@ -91,22 +145,40 @@ func handleUpload(c *gin.Context) {
 
 	// Notify master that file is stored
 	if OnFileStored != nil {
-		go OnFileStored(fileID)
+		go OnFileStored(StoredFileEvent{
+			FileID:       fileID,
+			RelativePath: relativePath,
+			StorePath:    filePath,
+		})
 	}
 
-	c.JSON(http.StatusOK, gin.H{"status": "stored", "file_id": fileID})
+	c.JSON(http.StatusOK, gin.H{
+		"status":        "stored",
+		"file_id":       fileID,
+		"relative_path": relativePath,
+		"store_path":    filePath,
+	})
 }
 
 func handleDownload(c *gin.Context) {
 	fileID := c.Param("file_id")
+	if len(fileID) < 2 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid file_id"})
+		return
+	}
 
-	filePath := filepath.Join("/data/files", fileID[:2], fileID)
+	filePath, err := storage.FilePath(fileID)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid file_id"})
+		return
+	}
 	if _, err := os.Stat(filePath); os.IsNotExist(err) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "file not found"})
 		return
 	}
 
-	c.File(filePath)
+	downloadName := sanitizeAttachmentName(c.Query("filename"), fileID)
+	c.FileAttachment(filePath, downloadName)
 }
 
 func handleBrowseDownload(c *gin.Context) {
@@ -116,16 +188,95 @@ func handleBrowseDownload(c *gin.Context) {
 		return
 	}
 
-	cleanPath := filepath.Clean(path)
-	if strings.Contains(cleanPath, "..") {
-		c.JSON(http.StatusForbidden, gin.H{"error": "path traversal not allowed"})
+	cleanPath, _, err := storage.ResolveManagedPath(path)
+	if err != nil {
+		c.JSON(http.StatusForbidden, gin.H{"error": err.Error()})
 		return
 	}
 
-	if _, err := os.Stat(cleanPath); os.IsNotExist(err) {
+	info, err := os.Stat(cleanPath)
+	if os.IsNotExist(err) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "file not found"})
 		return
 	}
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to stat path"})
+		return
+	}
 
-	c.File(cleanPath)
+	if info.IsDir() {
+		base := sanitizeAttachmentName(info.Name(), "download")
+		downloadName := sanitizeAttachmentName(c.Query("filename"), base+".zip")
+		streamZipDirectory(c, cleanPath, downloadName)
+		return
+	}
+
+	defaultName := sanitizeAttachmentName(filepath.Base(cleanPath), "download")
+	downloadName := sanitizeAttachmentName(c.Query("filename"), defaultName)
+	c.FileAttachment(cleanPath, downloadName)
+}
+
+func streamZipDirectory(c *gin.Context, dirPath, downloadName string) {
+	c.Header("Content-Type", "application/zip")
+	c.Header("Content-Disposition", fmt.Sprintf("attachment; filename=%q", downloadName))
+	c.Status(http.StatusOK)
+
+	zw := zip.NewWriter(c.Writer)
+	if err := filepath.Walk(dirPath, func(current string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if info.IsDir() {
+			return nil
+		}
+		rel, err := filepath.Rel(dirPath, current)
+		if err != nil {
+			return err
+		}
+		header, err := zip.FileInfoHeader(info)
+		if err != nil {
+			return err
+		}
+		header.Name = filepath.ToSlash(rel)
+		header.Method = zip.Deflate
+
+		w, err := zw.CreateHeader(header)
+		if err != nil {
+			return err
+		}
+
+		f, err := os.Open(current)
+		if err != nil {
+			return err
+		}
+		_, copyErr := io.Copy(w, f)
+		closeErr := f.Close()
+		if copyErr != nil {
+			return copyErr
+		}
+		if closeErr != nil {
+			return closeErr
+		}
+		return nil
+	}); err != nil {
+		c.Error(err)
+	}
+	if err := zw.Close(); err != nil {
+		c.Error(err)
+	}
+}
+
+func sanitizeAttachmentName(name, fallback string) string {
+	n := strings.TrimSpace(name)
+	if n == "" {
+		n = strings.TrimSpace(fallback)
+	}
+	if n == "" {
+		n = "download"
+	}
+	n = filepath.Base(n)
+	if n == "." || n == string(filepath.Separator) || n == "" {
+		return "download"
+	}
+	return n
 }

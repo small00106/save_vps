@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	stdpath "path"
 	"strings"
 
 	"github.com/cloudnest/cloudnest/internal/api/agent"
@@ -19,7 +20,7 @@ import (
 // BrowseNodeFiles handles GET /api/nodes/:uuid/files?path=
 func BrowseNodeFiles(c *gin.Context) {
 	nodeUUID := c.Param("uuid")
-	pathQuery := c.DefaultQuery("path", "/")
+	pathQuery := normalizeNodePath(c.DefaultQuery("path", "/"))
 
 	raw, found := cache.FileTreeCache.Get("filetree:" + nodeUUID)
 	if !found {
@@ -33,8 +34,6 @@ func BrowseNodeFiles(c *gin.Context) {
 		return
 	}
 
-	// Filter: return direct children of pathQuery
-	pathQuery = strings.TrimSuffix(pathQuery, "/")
 	var result []agent.FileEntry
 	for _, e := range entries {
 		parent := parentPath(e.Path)
@@ -52,7 +51,7 @@ func BrowseNodeFiles(c *gin.Context) {
 // NodeDownloadURL handles GET /api/nodes/:uuid/download?path=
 func NodeDownloadURL(c *gin.Context) {
 	nodeUUID := c.Param("uuid")
-	filePath := c.Query("path")
+	filePath := normalizeNodePath(c.Query("path"))
 	if filePath == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "path required"})
 		return
@@ -70,18 +69,15 @@ func NodeDownloadURL(c *gin.Context) {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "node file tree unavailable"})
 		return
 	}
-	allowed := false
+	var matched *agent.FileEntry
 	for _, e := range entries {
 		if e.Path == filePath {
-			if e.IsDir {
-				c.JSON(http.StatusBadRequest, gin.H{"error": "path is a directory"})
-				return
-			}
-			allowed = true
+			entry := e
+			matched = &entry
 			break
 		}
 	}
-	if !allowed {
+	if matched == nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "file not found in node file tree"})
 		return
 	}
@@ -93,88 +89,93 @@ func NodeDownloadURL(c *gin.Context) {
 		return
 	}
 
-	proxyURL := fmt.Sprintf("/api/proxy/browse?node=%s&path=%s", nodeUUID, url.QueryEscape(filePath))
-	c.JSON(http.StatusOK, gin.H{"url": proxyURL})
+	filename := baseNameFromPath(filePath, "download")
+	proxyURL := fmt.Sprintf("/api/proxy/browse?node=%s&path=%s&filename=%s", nodeUUID, url.QueryEscape(filePath), url.QueryEscape(filename))
+	if matched.IsDir {
+		filename += ".zip"
+		proxyURL += "&archive=zip"
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"url":      proxyURL,
+		"filename": filename,
+	})
 }
 
 // Search handles GET /api/files/search?q=keyword
 func Search(c *gin.Context) {
-	query := strings.ToLower(c.Query("q"))
+	query := strings.ToLower(strings.TrimSpace(c.Query("q")))
 	if query == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "query required"})
 		return
 	}
 
-	type SearchResult struct {
-		NodeUUID string          `json:"node_uuid"`
-		Entry    agent.FileEntry `json:"entry"`
+	like := "%" + query + "%"
+	var files []models.File
+	if err := dbcore.DB().
+		Where("status = ? AND is_dir = ? AND (LOWER(name) LIKE ? OR LOWER(path) LIKE ?)", "ready", false, like, like).
+		Order("path ASC, name ASC").
+		Find(&files).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "search failed"})
+		return
 	}
 
-	var results []SearchResult
-
-	// Iterate cache items by key to extract UUID directly
-	for key, item := range cache.FileTreeCache.Items() {
-		if !strings.HasPrefix(key, "filetree:") {
-			continue
-		}
-		nodeUUID := strings.TrimPrefix(key, "filetree:")
-
-		entries, ok := item.Object.([]agent.FileEntry)
-		if !ok {
-			continue
-		}
-
-		for _, e := range entries {
-			if strings.Contains(strings.ToLower(e.Name), query) {
-				results = append(results, SearchResult{
-					NodeUUID: nodeUUID,
-					Entry:    e,
-				})
-			}
-		}
+	if files == nil {
+		files = []models.File{}
 	}
-
-	if results == nil {
-		results = []SearchResult{}
-	}
-	c.JSON(http.StatusOK, results)
+	c.JSON(http.StatusOK, files)
 }
 
 // InitUpload handles POST /api/files/upload
 func InitUpload(c *gin.Context) {
 	var req struct {
+		NodeUUID  string   `json:"node_uuid"`
+		NodeUUIDs []string `json:"node_uuids"`
 		Name      string   `json:"name" binding:"required"`
 		Size      int64    `json:"size"`
 		Path      string   `json:"path"`
-		NodeUUIDs []string `json:"node_uuids" binding:"required"`
+		Overwrite bool     `json:"overwrite"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
-	// Resolve online target nodes first. If none are available, fail fast and avoid
-	// creating dangling file records stuck in uploading state.
-	seen := make(map[string]struct{}, len(req.NodeUUIDs))
-	onlineNodes := make([]models.Node, 0, len(req.NodeUUIDs))
-	for _, nodeUUID := range req.NodeUUIDs {
-		if _, exists := seen[nodeUUID]; exists {
-			continue
-		}
-		seen[nodeUUID] = struct{}{}
-		var node models.Node
-		if err := dbcore.DB().Where("uuid = ? AND status = ?", nodeUUID, "online").First(&node).Error; err == nil {
-			onlineNodes = append(onlineNodes, node)
-		}
+	nodeUUID := strings.TrimSpace(req.NodeUUID)
+	if nodeUUID == "" && len(req.NodeUUIDs) > 0 {
+		nodeUUID = strings.TrimSpace(req.NodeUUIDs[0])
 	}
-	if len(onlineNodes) == 0 {
+	if nodeUUID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "node_uuid required"})
+		return
+	}
+
+	var node models.Node
+	if err := dbcore.DB().Where("uuid = ? AND status = ?", nodeUUID, "online").First(&node).Error; err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "no online target nodes"})
 		return
 	}
 
-	fileID := uuid.New().String()
+	req.Path = normalizeNodePath(req.Path)
+	logicalPath := logicalManagedFilePath(req.Path, req.Name)
+	cacheConflict := nodeTreeContainsPath(nodeUUID, logicalPath)
+	existingFileID, exists := findNodeFileConflict(nodeUUID, req.Path, req.Name)
+	if (exists || cacheConflict) && !req.Overwrite {
+		c.JSON(http.StatusConflict, gin.H{
+			"error": "file already exists",
+			"conflict": gin.H{
+				"node_uuid": nodeUUID,
+				"path":      req.Path,
+				"name":      req.Name,
+			},
+		})
+		return
+	}
 
-	// Create file record
+	fileID := existingFileID
+	if fileID == "" {
+		fileID = uuid.New().String()
+	}
+
 	file := models.File{
 		FileID: fileID,
 		Name:   req.Name,
@@ -182,34 +183,37 @@ func InitUpload(c *gin.Context) {
 		Size:   req.Size,
 		Status: "uploading",
 	}
-	dbcore.DB().Create(&file)
-
-	// Create replicas and generate signed URLs
-	type Target struct {
-		NodeUUID string `json:"node_uuid"`
-		URL      string `json:"url"`
+	dbcore.DB().Save(&file)
+	if exists {
+		dbcore.DB().Model(&models.FileReplica{}).
+			Where("file_id = ? AND node_uuid != ?", fileID, node.UUID).
+			Update("status", "lost")
 	}
-	var targets []Target
 
-	for _, node := range onlineNodes {
-		replica := models.FileReplica{
-			FileID:   fileID,
-			NodeUUID: node.UUID,
-			Status:   "pending",
-		}
-		dbcore.DB().Create(&replica)
-
-		proxyURL := fmt.Sprintf("/api/proxy/upload/%s?node=%s", fileID, node.UUID)
-
-		targets = append(targets, Target{
-			NodeUUID: node.UUID,
-			URL:      proxyURL,
-		})
+	replica := models.FileReplica{
+		FileID:   fileID,
+		NodeUUID: node.UUID,
+		Status:   "pending",
 	}
+	dbcore.DB().Where("file_id = ? AND node_uuid = ?", fileID, node.UUID).Delete(&models.FileReplica{})
+	dbcore.DB().Create(&replica)
+
+	proxyURL := fmt.Sprintf(
+		"/api/proxy/upload/%s?node=%s&path=%s&name=%s&overwrite=%t",
+		fileID,
+		node.UUID,
+		url.QueryEscape(req.Path),
+		url.QueryEscape(req.Name),
+		req.Overwrite,
+	)
 
 	c.JSON(http.StatusOK, gin.H{
 		"file_id": fileID,
-		"targets": targets,
+		"url":     proxyURL,
+		"targets": []gin.H{{
+			"node_uuid": node.UUID,
+			"url":       proxyURL,
+		}},
 	})
 }
 
@@ -243,7 +247,9 @@ func GetDownloadURL(c *gin.Context) {
 		return
 	}
 
-	proxyURL := fmt.Sprintf("/api/proxy/download/%s?node=%s", fileID, replica.NodeUUID)
+	managedPath := logicalManagedFilePath(file.Path, file.Name)
+	filename := url.QueryEscape(baseNameFromPath(file.Name, fileID))
+	proxyURL := fmt.Sprintf("/api/proxy/browse?node=%s&path=%s&filename=%s", replica.NodeUUID, url.QueryEscape(managedPath), filename)
 
 	c.JSON(http.StatusOK, gin.H{
 		"url":      proxyURL,
@@ -296,7 +302,10 @@ func DeleteFile(c *gin.Context) {
 
 	hub := ws.GetHub()
 	for _, r := range replicas {
-		params, _ := json.Marshal(map[string]string{"file_id": fileID})
+		params, _ := json.Marshal(map[string]string{
+			"file_id":    fileID,
+			"store_path": r.StorePath,
+		})
 		hub.SendToAgent(r.NodeUUID, &ws.RPCMessage{
 			JSONRPC: "2.0",
 			Method:  "master.deleteFile",
@@ -336,9 +345,94 @@ func MoveFile(c *gin.Context) {
 }
 
 func parentPath(path string) string {
+	path = normalizeNodePath(path)
 	idx := strings.LastIndex(path, "/")
 	if idx <= 0 {
 		return "/"
 	}
 	return path[:idx]
+}
+
+func normalizeNodePath(path string) string {
+	trimmed := strings.TrimSpace(path)
+	if trimmed == "" || trimmed == "/" {
+		return "/"
+	}
+	trimmed = strings.ReplaceAll(trimmed, "\\", "/")
+	cleaned := stdpath.Clean("/" + strings.TrimPrefix(trimmed, "/"))
+	if cleaned == "." || cleaned == "" {
+		return "/"
+	}
+	return cleaned
+}
+
+func findNodeFileConflict(nodeUUID, path, name string) (string, bool) {
+	var existing struct {
+		FileID string
+	}
+	err := dbcore.DB().
+		Table("files").
+		Select("files.file_id").
+		Joins("JOIN file_replicas ON file_replicas.file_id = files.file_id").
+		Where("file_replicas.node_uuid = ? AND files.path = ? AND files.name = ? AND files.status != ?", nodeUUID, path, name, "deleting").
+		Order("files.created_at DESC").
+		First(&existing).Error
+	if err != nil {
+		return "", false
+	}
+	return existing.FileID, true
+}
+
+func nodeTreeContainsPath(nodeUUID, fullPath string) bool {
+	raw, found := cache.FileTreeCache.Get("filetree:" + nodeUUID)
+	if !found {
+		return false
+	}
+	entries, ok := raw.([]agent.FileEntry)
+	if !ok {
+		return false
+	}
+	for _, entry := range entries {
+		if entry.Path == fullPath {
+			return true
+		}
+	}
+	return false
+}
+
+func logicalManagedFilePath(dirPath, name string) string {
+	cleanName := strings.TrimSpace(name)
+	cleanName = strings.ReplaceAll(cleanName, "\\", "/")
+	cleanName = stdpath.Base("/" + strings.TrimPrefix(cleanName, "/"))
+	cleanName = strings.TrimPrefix(cleanName, "/")
+	if cleanName == "" || cleanName == "." {
+		return normalizeNodePath(dirPath)
+	}
+	dir := normalizeNodePath(dirPath)
+	if dir == "/" {
+		return "/" + cleanName
+	}
+	return dir + "/" + cleanName
+}
+
+func baseNameFromPath(p string, fallback string) string {
+	name := strings.TrimSpace(p)
+	if name == "" {
+		name = strings.TrimSpace(fallback)
+	}
+	if name == "" {
+		name = "download"
+	}
+	name = strings.TrimRight(name, `/\`)
+	if name == "" {
+		return "download"
+	}
+	if idx := strings.LastIndexAny(name, `/\`); idx >= 0 && idx < len(name)-1 {
+		name = name[idx+1:]
+	}
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return "download"
+	}
+	return name
 }

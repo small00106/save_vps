@@ -9,6 +9,7 @@ import (
 	"runtime"
 
 	"github.com/cloudnest/cloudnest-agent/internal/reporter"
+	"github.com/cloudnest/cloudnest-agent/internal/storage"
 )
 
 type registerResponse struct {
@@ -17,6 +18,13 @@ type registerResponse struct {
 }
 
 func RegisterWithMaster(cfg *Config, regToken string) error {
+	if err := storage.EnsureDataDirs(); err != nil {
+		return fmt.Errorf("failed to initialize data directory: %w", err)
+	}
+	if len(cfg.ScanDirs) == 0 {
+		cfg.ScanDirs = []string{storage.FilesDir()}
+	}
+
 	hostname, _ := os.Hostname()
 
 	diskTotal, _ := reporter.GetDiskTotal()

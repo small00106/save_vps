@@ -4,6 +4,7 @@ import (
 	"log"
 
 	"github.com/cloudnest/cloudnest-agent/internal/agent"
+	"github.com/cloudnest/cloudnest-agent/internal/storage"
 	"github.com/spf13/cobra"
 )
 
@@ -36,7 +37,7 @@ func init() {
 	registerCmd.Flags().StringVar(&masterURL, "master", "http://localhost:8800", "Master server URL")
 	registerCmd.Flags().StringVar(&regToken, "token", "cloudnest-register", "Registration token")
 	registerCmd.Flags().IntVar(&agentPort, "port", 8801, "Agent data plane port")
-	registerCmd.Flags().StringSliceVar(&scanDirs, "scan-dirs", []string{"/data"}, "Directories to scan for file tree")
+	registerCmd.Flags().StringSliceVar(&scanDirs, "scan-dirs", []string{storage.FilesDir()}, "Directories to scan for file tree")
 	registerCmd.Flags().Int64Var(&rateLimit, "rate-limit", 0, "Transfer rate limit in bytes/s (0=unlimited)")
 	rootCmd.AddCommand(registerCmd)
 }

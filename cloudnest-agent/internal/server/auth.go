@@ -32,10 +32,29 @@ func validateSignature(resourceID, method, expiresStr, sig string) bool {
 	if method == "" {
 		method = "GET"
 	}
+	expected := signResource(resourceID, method, expires)
+
+	return hmac.Equal([]byte(sig), []byte(expected))
+}
+
+func signResource(resourceID, method string, expires int64) string {
+	if method == "" {
+		method = "GET"
+	}
 	payload := fmt.Sprintf("%s:%s:%d", strings.ToUpper(method), resourceID, expires)
 	mac := hmac.New(sha256.New, []byte(signingSecret))
 	mac.Write([]byte(payload))
-	expected := hex.EncodeToString(mac.Sum(nil))
+	return hex.EncodeToString(mac.Sum(nil))
+}
 
-	return hmac.Equal([]byte(sig), []byte(expected))
+func signedUploadResource(fileID, path, name, overwrite string) string {
+	cleanPath := strings.TrimSpace(path)
+	cleanName := strings.TrimSpace(name)
+	if cleanName == "" && cleanPath == "" && strings.TrimSpace(overwrite) == "" {
+		return fileID
+	}
+	if cleanPath == "" {
+		cleanPath = "/"
+	}
+	return fmt.Sprintf("%s|%s|%s|%t", fileID, cleanPath, cleanName, strings.EqualFold(strings.TrimSpace(overwrite), "true"))
 }

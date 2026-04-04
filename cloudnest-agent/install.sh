@@ -9,7 +9,7 @@ SERVICE_NAME="cloudnest-agent"
 MASTER_URL=""
 REG_TOKEN=""
 PORT=8801
-SCAN_DIRS="/data"
+SCAN_DIRS="${HOME}/data_save/files"
 
 # Parse arguments
 while [[ $# -gt 0 ]]; do
@@ -31,7 +31,7 @@ echo "=== CloudNest Agent Installer ==="
 
 # Create install directory
 mkdir -p "$INSTALL_DIR"
-mkdir -p /data
+mkdir -p "$SCAN_DIRS"
 
 # Download binary (placeholder - replace with actual download URL)
 if [ ! -f "$INSTALL_DIR/cloudnest-agent" ]; then

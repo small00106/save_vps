@@ -122,9 +122,30 @@ export interface StoredFile {
   created_at: string;
 }
 
-export interface SearchResult {
+export interface DownloadResponse {
+  url: string;
+  filename: string;
+  size?: number;
+}
+
+export interface NodeUploadTarget {
   node_uuid: string;
-  entry: FileEntry;
+  url: string;
+}
+
+export interface NodeUploadResponse {
+  file_id: string;
+  url?: string;
+  target?: NodeUploadTarget;
+  targets?: NodeUploadTarget[];
+}
+
+export interface NodeUploadRequest {
+  name: string;
+  size: number;
+  path: string;
+  node_uuid: string;
+  overwrite?: boolean;
 }
 
 export interface CommandTask {
@@ -239,19 +260,19 @@ export function getNodeFiles(uuid: string, path = "/") {
 }
 
 export function getNodeDownloadURL(uuid: string, path: string) {
-  return api.get<{ url: string }>(`/nodes/${uuid}/download?path=${encodeURIComponent(path)}`);
+  return api.get<DownloadResponse>(`/nodes/${uuid}/download?path=${encodeURIComponent(path)}`);
 }
 
 // ========================
 // Files (virtual managed storage)
 // ========================
 
-export function initUpload(data: { name: string; size: number; path: string; node_uuids: string[] }) {
-  return api.post<{ file_id: string; targets: { node_uuid: string; url: string }[] }>("/files/upload", data);
+export function initUpload(data: NodeUploadRequest) {
+  return api.post<NodeUploadResponse>("/files/upload", data);
 }
 
 export function getDownloadURL(id: string) {
-  return api.get<{ url: string; filename: string; size: number }>(`/files/download/${id}`);
+  return api.get<DownloadResponse>(`/files/download/${id}`);
 }
 
 export function listFiles(path = "/") {
@@ -259,7 +280,7 @@ export function listFiles(path = "/") {
 }
 
 export function searchFiles(q: string) {
-  return api.get<SearchResult[]>(`/files/search?q=${encodeURIComponent(q)}`);
+  return api.get<StoredFile[]>(`/files/search?q=${encodeURIComponent(q)}`);
 }
 
 export function createDir(path: string, name: string) {

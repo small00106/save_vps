@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"sync"
@@ -21,6 +22,7 @@ import (
 
 	"github.com/cloudnest/cloudnest-agent/internal/reporter"
 	agentServer "github.com/cloudnest/cloudnest-agent/internal/server"
+	"github.com/cloudnest/cloudnest-agent/internal/storage"
 	"github.com/cloudnest/cloudnest-agent/internal/ws"
 )
 
@@ -30,6 +32,12 @@ var (
 	currentClient *ws.Client
 	currentUUID   string
 )
+
+const fileTreeInterval = 10 * time.Second
+
+func managedScanDirs(cfg *Config) []string {
+	return []string{storage.FilesDir()}
+}
 
 func setCurrentClient(c *ws.Client) {
 	clientMu.Lock()
@@ -47,6 +55,22 @@ func Run(cfg *Config) error {
 	log.Printf("Starting CloudNest Agent (UUID: %s)", cfg.UUID)
 	currentUUID = cfg.UUID
 
+	if err := storage.EnsureDataDirs(); err != nil {
+		return fmt.Errorf("failed to initialize data directory: %w", err)
+	}
+	cfg.ScanDirs = managedScanDirs(cfg)
+	log.Printf("File storage root: %s", storage.FilesDir())
+
+	lock, err := acquireDefaultRunLock()
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if err := lock.Release(); err != nil {
+			log.Printf("Failed to release agent lock: %v", err)
+		}
+	}()
+
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -54,22 +78,21 @@ func Run(cfg *Config) error {
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 
 	// Wire up the file-stored callback so HTTP upload handler can notify master
-	agentServer.OnFileStored = func(fileID string) {
+	agentServer.OnFileStored = func(event agentServer.StoredFileEvent) {
 		if c := getCurrentClient(); c != nil {
 			c.Send("agent.fileStored", map[string]interface{}{
-				"file_id": fileID,
+				"file_id":       event.FileID,
+				"relative_path": event.RelativePath,
+				"store_path":    event.StorePath,
 			})
 		}
 	}
 
-	// Start data plane HTTP server
-	go func() {
-		addr := fmt.Sprintf("0.0.0.0:%d", cfg.Port)
-		log.Printf("Data plane HTTP server on %s", addr)
-		if err := agentServer.Start(addr, cfg.RateLimit); err != nil {
-			log.Printf("HTTP server error: %v", err)
-		}
-	}()
+	log.Printf("Data plane HTTP server on 0.0.0.0:%d", cfg.Port)
+	dataPlaneErrCh, err := startDataPlane(cfg)
+	if err != nil {
+		return err
+	}
 
 	// WebSocket connection loop
 	go func() {
@@ -114,11 +137,16 @@ func Run(cfg *Config) error {
 		}
 	}()
 
-	<-sigCh
-	fmt.Println()
-	log.Println("Agent shutting down...")
-	cancel()
-	return nil
+	select {
+	case <-sigCh:
+		fmt.Println()
+		log.Println("Agent shutting down...")
+		cancel()
+		return nil
+	case err := <-dataPlaneErrCh:
+		cancel()
+		return err
+	}
 }
 
 func heartbeatLoop(client *ws.Client, cfg *Config, stop chan struct{}) {
@@ -175,7 +203,7 @@ func fileTreeLoop(client *ws.Client, cfg *Config, stop chan struct{}) {
 		"entries": prevEntries,
 	})
 
-	ticker := time.NewTicker(60 * time.Second)
+	ticker := time.NewTicker(fileTreeInterval)
 	defer ticker.Stop()
 
 	for {
@@ -328,7 +356,8 @@ func executeCommand(client *ws.Client, params json.RawMessage) {
 
 func deleteFile(client *ws.Client, params json.RawMessage) {
 	var data struct {
-		FileID string `json:"file_id"`
+		FileID    string `json:"file_id"`
+		StorePath string `json:"store_path"`
 	}
 	if err := json.Unmarshal(params, &data); err != nil {
 		return
@@ -338,7 +367,21 @@ func deleteFile(client *ws.Client, params json.RawMessage) {
 		return
 	}
 
-	path := fmt.Sprintf("/data/files/%s/%s", data.FileID[:2], data.FileID)
+	path := strings.TrimSpace(data.StorePath)
+	if path != "" {
+		path = filepath.Clean(path)
+		if _, err := storage.RelativeManagedPath(path); err != nil {
+			log.Printf("[FILE] Delete error: invalid managed path %q: %v", path, err)
+			return
+		}
+	} else {
+		var err error
+		path, err = storage.FilePath(data.FileID)
+		if err != nil {
+			log.Printf("[FILE] Delete error: %v", err)
+			return
+		}
+	}
 	if err := os.Remove(path); err != nil {
 		if os.IsNotExist(err) {
 			// File already gone — still confirm deletion to Master so it can clean up
@@ -485,8 +528,8 @@ func replicateFile(client *ws.Client, params json.RawMessage) {
 	}
 
 	// Save locally
-	dir := fmt.Sprintf("/data/files/%s", data.FileID[:2])
-	if err := os.MkdirAll(dir, 0755); err != nil {
+	dir, err := storage.EnsureShardDir(data.FileID)
+	if err != nil {
 		log.Printf("[FILE] Replicate mkdir error: %v", err)
 		return
 	}
@@ -529,7 +572,15 @@ func verifyFile(client *ws.Client, params json.RawMessage) {
 		return
 	}
 
-	filePath := fmt.Sprintf("/data/files/%s/%s", data.FileID[:2], data.FileID)
+	filePath, err := storage.FilePath(data.FileID)
+	if err != nil {
+		client.Send("agent.verifyResult", map[string]interface{}{
+			"file_id": data.FileID,
+			"match":   false,
+			"error":   "invalid file id",
+		})
+		return
+	}
 	f, err := os.Open(filePath)
 	if err != nil {
 		client.Send("agent.verifyResult", map[string]interface{}{
