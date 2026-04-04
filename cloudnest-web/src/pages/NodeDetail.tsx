@@ -1,11 +1,20 @@
-import { useEffect, useState, useMemo } from "react";
-import { useParams } from "react-router-dom";
+import { useEffect, useMemo, useState } from "react";
+import { useNavigate, useParams } from "react-router-dom";
 import {
   Loader2, Folder, FileText, ChevronRight, Download, ArrowLeft,
 } from "lucide-react";
 import {
-  getNode, getNodeMetrics, getNodeFiles, getNodeDownloadURL,
-  type Node, type FileEntry,
+  getNode,
+  getNodeMetrics,
+  getNodeFiles,
+  getNodeDownloadURL,
+  getNodeTraffic,
+  updateNodeTags,
+  execCommand,
+  getCommandTask,
+  type CommandTask,
+  type FileEntry,
+  type Node,
 } from "../api/client";
 import {
   ResponsiveContainer, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend,
@@ -19,12 +28,33 @@ function formatBytes(bytes: number, decimals = 1): string {
   return parseFloat((bytes / Math.pow(k, i)).toFixed(decimals)) + " " + sizes[i];
 }
 
+function parseTagsToInput(tags: string): string {
+  try {
+    const arr = JSON.parse(tags);
+    if (Array.isArray(arr)) {
+      return arr.map((x) => String(x)).join(", ");
+    }
+  } catch {
+    // ignore
+  }
+  return "";
+}
+
+type MetricPoint = {
+  timestamp?: string;
+  bucket_time?: string;
+  cpu_percent: number;
+  mem_percent: number;
+  disk_percent: number;
+};
+
 const RANGES = ["1h", "4h", "24h", "7d"] as const;
 
 export default function NodeDetail() {
   const { uuid } = useParams<{ uuid: string }>();
+  const navigate = useNavigate();
   const [node, setNode] = useState<Node | null>(null);
-  const [metrics, setMetrics] = useState<any[]>([]);
+  const [metrics, setMetrics] = useState<MetricPoint[]>([]);
   const [range, setRange] = useState<string>("1h");
   const [tab, setTab] = useState<"metrics" | "files">("metrics");
   const [loading, setLoading] = useState(true);
@@ -34,11 +64,26 @@ export default function NodeDetail() {
   const [files, setFiles] = useState<FileEntry[]>([]);
   const [filesLoading, setFilesLoading] = useState(false);
 
+  const [tagsInput, setTagsInput] = useState("");
+  const [savingTags, setSavingTags] = useState(false);
+  const [traffic, setTraffic] = useState<{
+    net_in_total: number;
+    net_out_total: number;
+    net_in_speed: number;
+    net_out_speed: number;
+  } | null>(null);
+  const [command, setCommand] = useState("");
+  const [runningCommand, setRunningCommand] = useState(false);
+  const [commandTask, setCommandTask] = useState<CommandTask | null>(null);
+
   useEffect(() => {
     if (!uuid) return;
     setLoading(true);
     getNode(uuid)
-      .then((res) => setNode(res.node))
+      .then((res) => {
+        setNode(res.node);
+        setTagsInput(parseTagsToInput(res.node.tags));
+      })
       .catch(() => {})
       .finally(() => setLoading(false));
   }, [uuid]);
@@ -47,7 +92,10 @@ export default function NodeDetail() {
     if (!uuid || tab !== "metrics") return;
     setMetricsLoading(true);
     getNodeMetrics(uuid, range)
-      .then((data) => setMetrics(Array.isArray(data) ? data : []))
+      .then((data) => {
+        const next = (Array.isArray(data) ? data : []) as MetricPoint[];
+        setMetrics(next);
+      })
       .catch(() => setMetrics([]))
       .finally(() => setMetricsLoading(false));
   }, [uuid, range, tab]);
@@ -61,10 +109,17 @@ export default function NodeDetail() {
       .finally(() => setFilesLoading(false));
   }, [uuid, currentPath, tab]);
 
+  useEffect(() => {
+    if (!uuid) return;
+    getNodeTraffic(uuid)
+      .then((data) => setTraffic(data))
+      .catch(() => setTraffic(null));
+  }, [uuid]);
+
   const chartData = useMemo(
     () =>
-      metrics.map((m: any) => ({
-        time: new Date(m.timestamp || m.bucket_time).toLocaleTimeString(),
+      metrics.map((m) => ({
+        time: new Date(m.timestamp || m.bucket_time || "").toLocaleTimeString(),
         CPU: m.cpu_percent,
         RAM: m.mem_percent,
         Disk: m.disk_percent,
@@ -96,6 +151,45 @@ export default function NodeDetail() {
     }
   };
 
+  const handleSaveTags = async () => {
+    if (!uuid || !node) return;
+    setSavingTags(true);
+    const nextTags = tagsInput
+      .split(",")
+      .map((t) => t.trim())
+      .filter(Boolean);
+    const raw = JSON.stringify(nextTags);
+    try {
+      await updateNodeTags(uuid, raw);
+      setNode({ ...node, tags: raw });
+    } catch {
+      // ignore
+    } finally {
+      setSavingTags(false);
+    }
+  };
+
+  const handleExecCommand = async () => {
+    if (!uuid || !command.trim()) return;
+    setRunningCommand(true);
+    setCommandTask(null);
+    try {
+      const res = await execCommand(uuid, command.trim());
+      for (let i = 0; i < 60; i += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 1000));
+        const task = await getCommandTask(res.task_id);
+        setCommandTask(task);
+        if (task.status !== "running" && task.status !== "pending") {
+          break;
+        }
+      }
+    } catch {
+      // ignore
+    } finally {
+      setRunningCommand(false);
+    }
+  };
+
   if (loading) {
     return (
       <div className="flex items-center justify-center h-[60vh]">
@@ -116,7 +210,6 @@ export default function NodeDetail() {
 
   return (
     <div className="space-y-6 animate-[fadeIn_0.3s_ease-out]">
-      {/* Header */}
       <div className="bg-[#18181b] border border-[#27272a] rounded-xl p-5">
         <div className="flex flex-wrap items-center gap-3 mb-2">
           <h1 className="text-xl font-bold text-[#fafafa]">{node.hostname}</h1>
@@ -137,7 +230,80 @@ export default function NodeDetail() {
         </div>
       </div>
 
-      {/* Tabs */}
+      <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
+        <div className="bg-[#18181b] border border-[#27272a] rounded-xl p-4 space-y-3">
+          <p className="text-xs text-[#a1a1aa]">Node Tags (comma separated)</p>
+          <input
+            value={tagsInput}
+            onChange={(e) => setTagsInput(e.target.value)}
+            className="w-full h-9 px-3 rounded-lg bg-[#09090b] border border-[#27272a] text-white text-sm focus:outline-none focus:border-[#3b82f6] transition-colors"
+            placeholder="prod,beijing,gpu"
+          />
+          <div className="flex items-center gap-2">
+            <button
+              onClick={handleSaveTags}
+              disabled={savingTags}
+              className="h-8 px-3 rounded-lg bg-[#3b82f6] hover:bg-blue-600 text-white text-xs font-medium transition-colors disabled:opacity-50"
+            >
+              {savingTags ? "Saving..." : "Save Tags"}
+            </button>
+            <button
+              onClick={() => navigate(`/terminal/${uuid}`)}
+              className="h-8 px-3 rounded-lg bg-[#18181b] border border-[#27272a] hover:bg-[#232329] text-[#fafafa] text-xs font-medium transition-colors"
+            >
+              Open Terminal
+            </button>
+          </div>
+        </div>
+
+        <div className="bg-[#18181b] border border-[#27272a] rounded-xl p-4">
+          <p className="text-xs text-[#a1a1aa] mb-3">Traffic</p>
+          <div className="space-y-2 text-sm">
+            <div className="flex items-center justify-between">
+              <span className="text-[#71717a]">Inbound Speed</span>
+              <span className="text-[#fafafa]">{formatBytes(traffic?.net_in_speed || 0)}/s</span>
+            </div>
+            <div className="flex items-center justify-between">
+              <span className="text-[#71717a]">Outbound Speed</span>
+              <span className="text-[#fafafa]">{formatBytes(traffic?.net_out_speed || 0)}/s</span>
+            </div>
+            <div className="flex items-center justify-between">
+              <span className="text-[#71717a]">Inbound Total</span>
+              <span className="text-[#fafafa]">{formatBytes(traffic?.net_in_total || 0)}</span>
+            </div>
+            <div className="flex items-center justify-between">
+              <span className="text-[#71717a]">Outbound Total</span>
+              <span className="text-[#fafafa]">{formatBytes(traffic?.net_out_total || 0)}</span>
+            </div>
+          </div>
+        </div>
+
+        <div className="bg-[#18181b] border border-[#27272a] rounded-xl p-4 space-y-3">
+          <p className="text-xs text-[#a1a1aa]">Quick Command</p>
+          <input
+            value={command}
+            onChange={(e) => setCommand(e.target.value)}
+            className="w-full h-9 px-3 rounded-lg bg-[#09090b] border border-[#27272a] text-white text-sm focus:outline-none focus:border-[#3b82f6] transition-colors"
+            placeholder="uptime"
+          />
+          <button
+            onClick={handleExecCommand}
+            disabled={runningCommand || !command.trim()}
+            className="h-8 px-3 rounded-lg bg-[#3b82f6] hover:bg-blue-600 text-white text-xs font-medium transition-colors disabled:opacity-50"
+          >
+            {runningCommand ? "Running..." : "Run"}
+          </button>
+          {commandTask && (
+            <div className="rounded-lg border border-[#27272a] bg-[#09090b] p-2">
+              <p className="text-[11px] text-[#a1a1aa] mb-1">Status: {commandTask.status}</p>
+              <pre className="text-[11px] text-[#fafafa] whitespace-pre-wrap break-all max-h-24 overflow-y-auto">
+                {commandTask.output || "(no output)"}
+              </pre>
+            </div>
+          )}
+        </div>
+      </div>
+
       <div className="flex gap-1 bg-[#18181b] border border-[#27272a] rounded-lg p-1 w-fit">
         {(["metrics", "files"] as const).map((t) => (
           <button
@@ -152,7 +318,6 @@ export default function NodeDetail() {
         ))}
       </div>
 
-      {/* Metrics tab */}
       {tab === "metrics" && (
         <div className="space-y-4">
           <div className="flex gap-2">
@@ -206,10 +371,8 @@ export default function NodeDetail() {
         </div>
       )}
 
-      {/* Files tab */}
       {tab === "files" && (
         <div className="bg-[#18181b] border border-[#27272a] rounded-xl overflow-hidden">
-          {/* Breadcrumbs */}
           <div className="flex items-center gap-1 px-4 py-3 border-b border-[#27272a] text-sm overflow-x-auto">
             {breadcrumbs.map((crumb, i) => (
               <span key={crumb.path} className="flex items-center gap-1 shrink-0">

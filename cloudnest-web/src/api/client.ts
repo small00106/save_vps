@@ -270,6 +270,13 @@ export function deleteFile(id: string) {
   return api.delete<{ message: string }>(`/files/${id}`);
 }
 
+export function moveFile(
+  id: string,
+  data: { new_path?: string; new_name?: string },
+) {
+  return api.put<{ message: string }>(`/files/${id}/move`, data);
+}
+
 // ========================
 // Remote Operations
 // ========================
@@ -296,6 +303,10 @@ export function createPingTask(data: Partial<PingTask>) {
 
 export function getPingResults(taskId: number) {
   return api.get<PingResult[]>(`/ping/tasks/${taskId}/results`);
+}
+
+export function deletePingTask(taskId: number) {
+  return api.delete<{ message: string }>(`/ping/tasks/${taskId}`);
 }
 
 // ========================

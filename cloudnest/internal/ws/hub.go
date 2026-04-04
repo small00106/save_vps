@@ -53,14 +53,25 @@ func (h *Hub) Register(uuid string, info *AgentInfo) {
 }
 
 func (h *Hub) Unregister(uuid string) {
+	h.UnregisterIfCurrent(uuid, nil)
+}
+
+// UnregisterIfCurrent removes an agent connection only when it still matches
+// the current connection in the hub. If conn is nil, it unregisters unconditionally.
+func (h *Hub) UnregisterIfCurrent(uuid string, conn *SafeConn) bool {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
 	if info, ok := h.agents[uuid]; ok {
+		if conn != nil && info.Conn != conn {
+			return false
+		}
 		info.Conn.Close()
 		delete(h.agents, uuid)
 		log.Printf("[Hub] Agent unregistered: %s", uuid)
+		return true
 	}
+	return false
 }
 
 func (h *Hub) Get(uuid string) *AgentInfo {

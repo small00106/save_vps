@@ -1,10 +1,10 @@
 import { useEffect, useState } from "react";
 import {
-  Loader2, Plus, X, Trash2, Bell, Send, Globe, Mail,
+  Loader2, Plus, X, Trash2, Bell, Send, Globe, Mail, Pencil,
 } from "lucide-react";
 import {
   getAlertRules, createAlertRule, updateAlertRule, deleteAlertRule,
-  getAlertChannels, createAlertChannel,
+  getAlertChannels, createAlertChannel, updateAlertChannel,
   type AlertRule, type AlertChannel,
 } from "../api/client";
 
@@ -50,6 +50,10 @@ export default function Alerts() {
   const [channelConfigFrom, setChannelConfigFrom] = useState("");
   const [channelConfigTo, setChannelConfigTo] = useState("");
   const [channelSubmitting, setChannelSubmitting] = useState(false);
+  const [editingChannelId, setEditingChannelId] = useState<number | null>(null);
+  const [editChannelName, setEditChannelName] = useState("");
+  const [editChannelConfig, setEditChannelConfig] = useState("");
+  const [channelUpdating, setChannelUpdating] = useState(false);
 
   useEffect(() => {
     Promise.all([getAlertRules(), getAlertChannels()])
@@ -79,7 +83,9 @@ export default function Alerts() {
       setShowRuleForm(false);
       setRuleName("");
       setRuleNodeUuid("");
-    } catch {}
+    } catch (err) {
+      void err;
+    }
     setRuleSubmitting(false);
   };
 
@@ -87,14 +93,18 @@ export default function Alerts() {
     try {
       const updated = await updateAlertRule(rule.id, { enabled: !rule.enabled });
       setRules((prev) => prev.map((r) => (r.id === rule.id ? updated : r)));
-    } catch {}
+    } catch (err) {
+      void err;
+    }
   };
 
   const handleDeleteRule = async (id: number) => {
     try {
       await deleteAlertRule(id);
       setRules((prev) => prev.filter((r) => r.id !== id));
-    } catch {}
+    } catch (err) {
+      void err;
+    }
   };
 
   const handleCreateChannel = async () => {
@@ -134,8 +144,45 @@ export default function Alerts() {
       setChannelConfigUrl("");
       setChannelConfigBotToken("");
       setChannelConfigChatId("");
-    } catch {}
+    } catch (err) {
+      void err;
+    }
     setChannelSubmitting(false);
+  };
+
+  const openEditChannel = (channel: AlertChannel) => {
+    setEditingChannelId(channel.id);
+    setEditChannelName(channel.name);
+    try {
+      setEditChannelConfig(JSON.stringify(JSON.parse(channel.config), null, 2));
+    } catch {
+      setEditChannelConfig(channel.config || "{}");
+    }
+  };
+
+  const handleUpdateChannel = async () => {
+    if (!editingChannelId || !editChannelName.trim()) return;
+    try {
+      JSON.parse(editChannelConfig);
+    } catch {
+      alert("配置必须是合法 JSON");
+      return;
+    }
+    setChannelUpdating(true);
+    try {
+      const updated = await updateAlertChannel(editingChannelId, {
+        name: editChannelName.trim(),
+        config: editChannelConfig,
+      });
+      setChannels((prev) => prev.map((c) => (c.id === updated.id ? updated : c)));
+      setEditingChannelId(null);
+      setEditChannelName("");
+      setEditChannelConfig("");
+    } catch {
+      // ignore
+    } finally {
+      setChannelUpdating(false);
+    }
   };
 
   if (loading) {
@@ -375,6 +422,44 @@ export default function Alerts() {
           </div>
         )}
 
+        {editingChannelId && (
+          <div className="bg-[#18181b] border border-[#27272a] rounded-xl p-5 mb-4 space-y-4">
+            <div className="flex items-center justify-between">
+              <h3 className="text-sm font-semibold text-[#fafafa]">Edit Channel</h3>
+              <button
+                onClick={() => setEditingChannelId(null)}
+                className="p-1 rounded text-[#71717a] hover:text-[#fafafa] transition-colors"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <div>
+              <label className="block text-xs text-[#a1a1aa] mb-1">Name</label>
+              <input
+                value={editChannelName}
+                onChange={(e) => setEditChannelName(e.target.value)}
+                className={inputClass}
+              />
+            </div>
+            <div>
+              <label className="block text-xs text-[#a1a1aa] mb-1">Config (JSON)</label>
+              <textarea
+                value={editChannelConfig}
+                onChange={(e) => setEditChannelConfig(e.target.value)}
+                className="w-full min-h-32 px-3 py-2 rounded-lg bg-[#09090b] border border-[#27272a] text-white text-xs font-mono focus:outline-none focus:border-[#3b82f6] transition-colors"
+              />
+            </div>
+            <button
+              onClick={handleUpdateChannel}
+              disabled={channelUpdating || !editChannelName.trim()}
+              className="flex items-center gap-2 px-4 py-2 rounded-lg bg-[#3b82f6] hover:bg-blue-600 text-white text-sm font-medium transition-colors disabled:opacity-50"
+            >
+              {channelUpdating && <Loader2 className="w-4 h-4 animate-spin" />}
+              Save Channel
+            </button>
+          </div>
+        )}
+
         {channels.length === 0 ? (
           <div className="bg-[#18181b] border border-[#27272a] rounded-xl p-8 text-center text-[#71717a] text-sm">
             No notification channels configured
@@ -396,6 +481,13 @@ export default function Alerts() {
                     <p className="text-sm text-[#fafafa] font-medium">{ch.name}</p>
                     <p className={`text-xs ${style.text}`}>{ch.type}</p>
                   </div>
+                  <button
+                    onClick={() => openEditChannel(ch)}
+                    className="ml-auto p-1.5 rounded-md text-[#71717a] hover:text-[#3b82f6] hover:bg-[#3b82f6]/10 transition-colors"
+                    title="Edit channel"
+                  >
+                    <Pencil className="w-4 h-4" />
+                  </button>
                 </div>
               );
             })}

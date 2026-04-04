@@ -1,9 +1,9 @@
 import { useEffect, useState } from "react";
 import {
-  Loader2, Plus, X, ChevronDown, ChevronUp, Clock, Target, CheckCircle2, XCircle,
+  Loader2, Plus, X, ChevronDown, ChevronUp, Clock, Target, CheckCircle2, XCircle, Trash2,
 } from "lucide-react";
 import {
-  getPingTasks, createPingTask, getPingResults,
+  getPingTasks, createPingTask, getPingResults, deletePingTask,
   type PingTask, type PingResult,
 } from "../api/client";
 
@@ -20,6 +20,7 @@ export default function PingTasks() {
   const [formType, setFormType] = useState("icmp");
   const [formInterval, setFormInterval] = useState(60);
   const [submitting, setSubmitting] = useState(false);
+  const [deletingId, setDeletingId] = useState<number | null>(null);
 
   useEffect(() => {
     getPingTasks()
@@ -62,8 +63,27 @@ export default function PingTasks() {
       setFormTarget("");
       setFormType("icmp");
       setFormInterval(60);
-    } catch {}
+    } catch (err) {
+      void err;
+    }
     setSubmitting(false);
+  };
+
+  const handleDelete = async (taskId: number) => {
+    if (!confirm("确认删除该 Ping 任务？")) return;
+    setDeletingId(taskId);
+    try {
+      await deletePingTask(taskId);
+      setTasks((prev) => prev.filter((t) => t.id !== taskId));
+      if (expandedId === taskId) {
+        setExpandedId(null);
+        setResults([]);
+      }
+    } catch {
+      // ignore
+    } finally {
+      setDeletingId(null);
+    }
   };
 
   if (loading) {
@@ -154,36 +174,50 @@ export default function PingTasks() {
               key={task.id}
               className="bg-[#18181b] border border-[#27272a] rounded-xl overflow-hidden"
             >
-              <button
-                onClick={() => toggleExpand(task.id)}
-                className="flex items-center gap-4 w-full px-5 py-4 hover:bg-[#232329] transition-colors text-left"
-              >
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2 mb-1">
-                    <span className="text-[#fafafa] font-medium text-sm">{task.name}</span>
-                    {!task.enabled && (
-                      <span className="px-2 py-0.5 rounded text-[10px] bg-[#27272a] text-[#71717a]">
-                        Disabled
+              <div className="flex items-center gap-3 px-5 py-4 hover:bg-[#232329] transition-colors">
+                <button
+                  onClick={() => toggleExpand(task.id)}
+                  className="flex items-center gap-4 flex-1 min-w-0 text-left"
+                >
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 mb-1">
+                      <span className="text-[#fafafa] font-medium text-sm">{task.name}</span>
+                      {!task.enabled && (
+                        <span className="px-2 py-0.5 rounded text-[10px] bg-[#27272a] text-[#71717a]">
+                          Disabled
+                        </span>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-4 text-xs text-[#71717a]">
+                      <span className="flex items-center gap-1">
+                        <Target className="w-3 h-3" />
+                        {task.target}
                       </span>
-                    )}
+                      <span className="flex items-center gap-1">
+                        <Clock className="w-3 h-3" />
+                        {task.interval}s
+                      </span>
+                    </div>
                   </div>
-                  <div className="flex items-center gap-4 text-xs text-[#71717a]">
-                    <span className="flex items-center gap-1">
-                      <Target className="w-3 h-3" />
-                      {task.target}
-                    </span>
-                    <span className="flex items-center gap-1">
-                      <Clock className="w-3 h-3" />
-                      {task.interval}s
-                    </span>
-                  </div>
-                </div>
-                {expandedId === task.id ? (
-                  <ChevronUp className="w-4 h-4 text-[#71717a] shrink-0" />
-                ) : (
-                  <ChevronDown className="w-4 h-4 text-[#71717a] shrink-0" />
-                )}
-              </button>
+                  {expandedId === task.id ? (
+                    <ChevronUp className="w-4 h-4 text-[#71717a] shrink-0" />
+                  ) : (
+                    <ChevronDown className="w-4 h-4 text-[#71717a] shrink-0" />
+                  )}
+                </button>
+                <button
+                  onClick={() => handleDelete(task.id)}
+                  disabled={deletingId === task.id}
+                  className="p-1.5 rounded-md text-[#71717a] hover:text-[#ef4444] hover:bg-[#ef4444]/10 transition-colors disabled:opacity-50"
+                  title="Delete task"
+                >
+                  {deletingId === task.id ? (
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                  ) : (
+                    <Trash2 className="w-4 h-4" />
+                  )}
+                </button>
+              </div>
 
               {expandedId === task.id && (
                 <div className="border-t border-[#27272a] px-5 py-3">

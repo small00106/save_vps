@@ -110,7 +110,11 @@ func WebSocketHandler(c *gin.Context) {
 	go pushPingTasks(safeConn)
 
 	defer func() {
-		hub.Unregister(node.UUID)
+		// If this connection has already been replaced by a newer one, do not
+		// unregister or mark node offline.
+		if !hub.UnregisterIfCurrent(node.UUID, safeConn) {
+			return
+		}
 		dbcore.DB().Model(&node).Update("status", "offline")
 		ws.GetDashboardHub().Broadcast(gin.H{
 			"type":   "status",

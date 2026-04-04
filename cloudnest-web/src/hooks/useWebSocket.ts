@@ -21,7 +21,7 @@ let globalConnected = false;
 let globalWs: WebSocket | null = null;
 let globalRetry = 0;
 let globalTimer: ReturnType<typeof setTimeout> | undefined;
-let globalListeners = new Set<() => void>();
+const globalListeners = new Set<() => void>();
 let globalDestroyed = false;
 let globalStatusVersion = 0; // bumped on status changes so consumers can re-fetch
 

@@ -4,7 +4,7 @@ import {
   Server, HardDrive, Activity, ArrowDown, ArrowUp, Loader2, ServerOff,
   Wifi, WifiOff,
 } from "lucide-react";
-import { getNodes, type Node } from "../api/client";
+import { getNodes, getSettings, type Node, type Settings } from "../api/client";
 import { useWebSocket } from "../hooks/useWebSocket";
 
 function formatBytes(bytes: number, decimals = 1): string {
@@ -48,13 +48,20 @@ function ProgressBar({ value, color }: { value: number; color: string }) {
 export default function Dashboard() {
   const navigate = useNavigate();
   const [nodes, setNodes] = useState<Node[]>([]);
+  const [settings, setSettings] = useState<Settings | null>(null);
   const [loading, setLoading] = useState(true);
   const { nodeData, connected, statusVersion } = useWebSocket();
 
   useEffect(() => {
-    getNodes()
-      .then((data) => setNodes(Array.isArray(data) ? data : []))
-      .catch(() => setNodes([]))
+    Promise.all([getNodes(), getSettings()])
+      .then(([nodeDataRes, settingsRes]) => {
+        setNodes(Array.isArray(nodeDataRes) ? nodeDataRes : []);
+        setSettings(settingsRes || null);
+      })
+      .catch(() => {
+        setNodes([]);
+        setSettings(null);
+      })
       .finally(() => setLoading(false));
   }, [statusVersion]);
 
@@ -82,11 +89,12 @@ export default function Dashboard() {
   return (
     <div className="space-y-6">
       {/* Stats bar */}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
         {[
           { label: "Total Nodes", value: String(nodes.length), icon: Server, color: "#3b82f6" },
           { label: "Online", value: String(onlineCount), icon: Activity, color: "#22c55e" },
           { label: "Total Storage", value: formatBytes(totalStorage), icon: HardDrive, color: "#f59e0b" },
+          { label: "Managed Files", value: String(settings?.file_count || 0), icon: HardDrive, color: "#14b8a6" },
         ].map((s) => (
           <div key={s.label} className="bg-[#18181b] border border-[#27272a] rounded-xl p-4 flex items-center gap-4">
             <div

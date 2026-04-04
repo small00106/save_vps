@@ -2,11 +2,11 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import {
   Search, FileText, Loader2, FolderSearch, Download, Upload, Plus, X,
   Folder, ChevronRight, ArrowLeft, Trash2, CheckCircle2, AlertCircle,
-  HardDrive,
+  HardDrive, Pencil,
 } from "lucide-react";
 import {
   searchFiles, getNodeDownloadURL, getNodes, listFiles, initUpload,
-  getDownloadURL, createDir, deleteFile,
+  getDownloadURL, createDir, deleteFile, moveFile,
   type SearchResult, type StoredFile, type Node,
 } from "../api/client";
 
@@ -175,6 +175,10 @@ function FilesTab() {
   const [showNewFolder, setShowNewFolder] = useState(false);
   const [folderName, setFolderName] = useState("");
   const [creatingFolder, setCreatingFolder] = useState(false);
+  const [editingFile, setEditingFile] = useState<StoredFile | null>(null);
+  const [moveName, setMoveName] = useState("");
+  const [movePath, setMovePath] = useState("");
+  const [movingFile, setMovingFile] = useState(false);
 
   const loadFiles = useCallback(async () => {
     setLoading(true);
@@ -196,7 +200,7 @@ function FilesTab() {
         setSelectedNodes([online[0].uuid]);
       }
     }).catch(() => setNodes([]));
-  }, [showUpload]);
+  }, [showUpload, selectedNodes.length]);
 
   // Breadcrumbs
   const breadcrumbs = (() => {
@@ -309,6 +313,30 @@ function FilesTab() {
       const res = await getDownloadURL(fileId);
       window.open(res.url, "_blank");
     } catch { /* ignore */ }
+  };
+
+  const openMoveDialog = (file: StoredFile) => {
+    setEditingFile(file);
+    setMoveName(file.name);
+    setMovePath(file.path);
+  };
+
+  const handleMove = async () => {
+    if (!editingFile) return;
+    if (!moveName.trim() || !movePath.trim()) return;
+    setMovingFile(true);
+    try {
+      await moveFile(editingFile.file_id, {
+        new_name: moveName.trim(),
+        new_path: movePath.trim(),
+      });
+      setEditingFile(null);
+      loadFiles();
+    } catch {
+      // ignore
+    } finally {
+      setMovingFile(false);
+    }
   };
 
   const handleDrop = (e: React.DragEvent) => {
@@ -496,6 +524,48 @@ function FilesTab() {
         </div>
       )}
 
+      {editingFile && (
+        <div className="bg-[#18181b] border border-[#27272a] rounded-xl p-5 space-y-4">
+          <div className="flex items-center justify-between">
+            <h3 className="text-sm font-semibold text-[#fafafa]">Move / Rename</h3>
+            <button
+              onClick={() => setEditingFile(null)}
+              className="p-1 rounded text-[#71717a] hover:text-[#fafafa] transition-colors"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div>
+              <label className="block text-xs text-[#a1a1aa] mb-1">Name</label>
+              <input
+                value={moveName}
+                onChange={(e) => setMoveName(e.target.value)}
+                className="w-full h-9 px-3 rounded-lg bg-[#09090b] border border-[#27272a] text-white text-sm focus:outline-none focus:border-[#3b82f6] transition-colors"
+                placeholder="new-name"
+              />
+            </div>
+            <div>
+              <label className="block text-xs text-[#a1a1aa] mb-1">Path</label>
+              <input
+                value={movePath}
+                onChange={(e) => setMovePath(e.target.value)}
+                className="w-full h-9 px-3 rounded-lg bg-[#09090b] border border-[#27272a] text-white text-sm focus:outline-none focus:border-[#3b82f6] transition-colors"
+                placeholder="/target-path"
+              />
+            </div>
+          </div>
+          <button
+            onClick={handleMove}
+            disabled={movingFile || !moveName.trim() || !movePath.trim()}
+            className="flex items-center gap-2 h-9 px-4 rounded-lg bg-[#3b82f6] hover:bg-blue-600 text-white text-sm font-medium transition-colors disabled:opacity-50"
+          >
+            {movingFile && <Loader2 className="w-4 h-4 animate-spin" />}
+            Save
+          </button>
+        </div>
+      )}
+
       {/* File browser */}
       <div className="bg-[#18181b] border border-[#27272a] rounded-xl overflow-hidden">
         {/* Breadcrumbs */}
@@ -561,6 +631,13 @@ function FilesTab() {
                     )}
                   </button>
                   <div className="flex items-center gap-1 shrink-0">
+                    <button
+                      onClick={() => openMoveDialog(file)}
+                      className="p-1 rounded text-[#71717a] hover:text-[#3b82f6] opacity-0 group-hover:opacity-100 transition-all"
+                      title="Move/Rename"
+                    >
+                      <Pencil className="w-3.5 h-3.5" />
+                    </button>
                     {!file.is_dir && file.status === "ready" && (
                       <button
                         onClick={() => handleDownload(file.file_id)}
