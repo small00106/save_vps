@@ -5,6 +5,7 @@ import (
 	"log"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -19,6 +20,7 @@ type RPCMessage struct {
 }
 
 type Client struct {
+	mu        sync.Mutex
 	conn      *websocket.Conn
 	masterURL string
 	token     string
@@ -45,9 +47,11 @@ func (c *Client) Connect() error {
 	maxBackoff := 60 * time.Second
 
 	for {
-		var err error
-		c.conn, _, err = websocket.DefaultDialer.Dial(wsURL, header)
+		conn, _, err := websocket.DefaultDialer.Dial(wsURL, header)
 		if err == nil {
+			c.mu.Lock()
+			c.conn = conn
+			c.mu.Unlock()
 			log.Printf("[WS] Connected to master")
 			backoff = time.Second
 			return nil
@@ -64,9 +68,14 @@ func (c *Client) Connect() error {
 
 // SendJSON sends a JSON-RPC message.
 func (c *Client) SendJSON(msg *RPCMessage) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
 	if c.conn == nil {
 		return nil
 	}
+
+	// gorilla/websocket requires a single writer per connection.
 	return c.conn.WriteJSON(msg)
 }
 
@@ -86,8 +95,15 @@ func (c *Client) Send(method string, params interface{}) error {
 // ReadLoop reads messages from the WebSocket and dispatches them.
 // Returns an error when the connection is lost.
 func (c *Client) ReadLoop() error {
+	c.mu.Lock()
+	conn := c.conn
+	c.mu.Unlock()
+	if conn == nil {
+		return nil
+	}
+
 	for {
-		_, msgBytes, err := c.conn.ReadMessage()
+		_, msgBytes, err := conn.ReadMessage()
 		if err != nil {
 			return err
 		}
@@ -105,7 +121,11 @@ func (c *Client) ReadLoop() error {
 }
 
 func (c *Client) Close() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
 	if c.conn != nil {
 		c.conn.Close()
+		c.conn = nil
 	}
 }

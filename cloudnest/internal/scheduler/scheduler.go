@@ -67,8 +67,26 @@ func healthChecker(stop chan struct{}) {
 			}
 
 			uuids := make([]string, 0, len(staleOnline))
+			stillConnected := make([]string, 0, len(staleOnline))
 			for _, n := range staleOnline {
+				// If WS is still connected, treat node as online and refresh last_seen.
+				if ws.GetHub().Get(n.UUID) != nil {
+					stillConnected = append(stillConnected, n.UUID)
+					continue
+				}
 				uuids = append(uuids, n.UUID)
+			}
+
+			if len(stillConnected) > 0 {
+				if err := dbcore.DB().Model(&models.Node{}).
+					Where("uuid IN ?", stillConnected).
+					Update("last_seen", time.Now()).Error; err != nil {
+					log.Printf("[Scheduler] Failed to refresh last_seen for connected nodes: %v", err)
+				}
+			}
+
+			if len(uuids) == 0 {
+				continue
 			}
 			if err := dbcore.DB().Model(&models.Node{}).
 				Where("uuid IN ?", uuids).
