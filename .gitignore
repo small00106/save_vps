@@ -32,3 +32,6 @@ Thumbs.db
 
 # Claude
 .claude/
+
+# Local release artifacts
+release/
