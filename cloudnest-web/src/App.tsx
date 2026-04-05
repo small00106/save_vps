@@ -1,6 +1,7 @@
 import { Routes, Route, Navigate } from "react-router-dom";
 import { AuthProvider, useAuth } from "./hooks/useAuth";
 import { PreferencesProvider } from "./contexts/PreferencesContext";
+import { MouseGlowProvider } from "./components/MouseGlowProvider";
 import Layout from "./components/Layout";
 import { lazy, Suspense, type ReactNode } from "react";
 
@@ -16,8 +17,8 @@ const SettingsPage = lazy(() => import("./pages/SettingsPage"));
 
 function Loading() {
   return (
-    <div className="flex h-dvh items-center justify-center bg-bg">
-      <div className="h-6 w-6 animate-spin rounded-full border-2 border-accent border-t-transparent" />
+    <div className="flex h-dvh items-center justify-center">
+      <div className="h-8 w-8 animate-spin rounded-full border-2 border-accent border-t-transparent" />
     </div>
   );
 }
@@ -60,7 +61,9 @@ export default function App() {
   return (
     <PreferencesProvider>
       <AuthProvider>
-        <AppRoutes />
+        <MouseGlowProvider>
+          <AppRoutes />
+        </MouseGlowProvider>
       </AuthProvider>
     </PreferencesProvider>
   );

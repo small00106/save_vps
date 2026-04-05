@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useAuth } from "../hooks/useAuth";
-import { Lock } from "lucide-react";
+import { Lock, User, ArrowRight, Loader2 } from "lucide-react";
 import { useI18n } from "../i18n/useI18n";
 
 export default function LoginPage() {
@@ -25,58 +25,126 @@ export default function LoginPage() {
   };
 
   return (
-    <div className="flex h-dvh items-center justify-center bg-bg p-4">
+    <div className="relative flex min-h-dvh items-center justify-center p-4 overflow-hidden">
+      {/* Animated gradient background blobs */}
+      <div className="absolute inset-0 -z-10 overflow-hidden">
+        <div 
+          className="absolute -top-1/4 -left-1/4 h-[600px] w-[600px] rounded-full opacity-30"
+          style={{
+            background: "radial-gradient(circle, var(--ui-accent) 0%, transparent 70%)",
+            filter: "blur(80px)",
+            animation: "float 8s ease-in-out infinite",
+          }}
+        />
+        <div 
+          className="absolute -bottom-1/4 -right-1/4 h-[500px] w-[500px] rounded-full opacity-25"
+          style={{
+            background: "radial-gradient(circle, var(--ui-accent-secondary) 0%, transparent 70%)",
+            filter: "blur(80px)",
+            animation: "float 10s ease-in-out infinite reverse",
+          }}
+        />
+        <div 
+          className="absolute top-1/3 right-1/4 h-[400px] w-[400px] rounded-full opacity-20"
+          style={{
+            background: "radial-gradient(circle, var(--ui-accent-tertiary) 0%, transparent 70%)",
+            filter: "blur(60px)",
+            animation: "float 12s ease-in-out infinite",
+          }}
+        />
+      </div>
+
       <form
         onSubmit={handleSubmit}
-        className="w-full max-w-sm animate-slide-up rounded-xl border border-border bg-card p-8"
+        className="relative w-full max-w-md animate-slide-up glass-card rounded-2xl p-8 md:p-10"
       >
-        <div className="mb-6 flex flex-col items-center gap-3">
-          <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-accent/15 text-accent">
-            <Lock size={24} />
+        {/* Decorative gradient border effect */}
+        <div 
+          className="absolute -inset-[1px] rounded-2xl opacity-50 -z-10"
+          style={{
+            background: "linear-gradient(135deg, var(--ui-accent), var(--ui-accent-secondary), var(--ui-accent-tertiary))",
+          }}
+        />
+
+        {/* Header */}
+        <div className="mb-8 flex flex-col items-center gap-4">
+          <div 
+            className="flex h-16 w-16 items-center justify-center rounded-2xl"
+            style={{
+              background: "linear-gradient(135deg, var(--ui-accent), var(--ui-accent-secondary))",
+              boxShadow: "0 8px 32px var(--ui-accent-glow)",
+            }}
+          >
+            <Lock className="h-8 w-8 text-white" />
           </div>
-          <h1 className="text-xl font-semibold text-text-primary">CloudNest</h1>
-          <p className="text-sm text-text-muted">
-            {tx("登录后进入控制台", "Sign in to your dashboard")}
-          </p>
+          <div className="text-center">
+            <h1 className="text-2xl font-bold text-text-primary">
+              {tx("欢迎回来", "Welcome back")}
+            </h1>
+            <p className="mt-1 text-sm text-text-muted">
+              {tx("登录后进入控制台", "Sign in to your dashboard")}
+            </p>
+          </div>
         </div>
+
+        {/* Error message */}
         {error && (
-          <div className="mb-4 rounded-lg bg-offline/10 px-3 py-2 text-sm text-offline">
+          <div className="mb-6 rounded-xl bg-offline/10 border border-offline/20 px-4 py-3 text-sm text-offline animate-slide-up">
             {error}
           </div>
         )}
-        <label className="mb-4 block">
-          <span className="mb-1 block text-xs text-text-muted">
-            {tx("用户名", "Username")}
-          </span>
-          <input
-            type="text"
-            value={username}
-            onChange={(e) => setUsername(e.target.value)}
-            required
-            autoFocus
-            className="w-full rounded-lg border border-border bg-bg px-3 py-2 text-sm text-text-primary outline-none transition focus:border-accent focus:ring-1 focus:ring-accent/30"
-          />
-        </label>
-        <label className="mb-6 block">
-          <span className="mb-1 block text-xs text-text-muted">
-            {tx("密码", "Password")}
-          </span>
-          <input
-            type="password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            required
-            className="w-full rounded-lg border border-border bg-bg px-3 py-2 text-sm text-text-primary outline-none transition focus:border-accent focus:ring-1 focus:ring-accent/30"
-          />
-        </label>
+
+        {/* Form fields */}
+        <div className="space-y-5">
+          <label className="block">
+            <span className="mb-2 flex items-center gap-2 text-sm font-medium text-text-secondary">
+              <User className="h-4 w-4" />
+              {tx("用户名", "Username")}
+            </span>
+            <input
+              type="text"
+              value={username}
+              onChange={(e) => setUsername(e.target.value)}
+              required
+              autoFocus
+              placeholder={tx("请输入用户名", "Enter your username")}
+              className="w-full rounded-xl border border-border bg-bg/50 px-4 py-3 text-sm text-text-primary placeholder-text-muted outline-none transition-all duration-200 focus:border-accent focus:bg-bg/80"
+            />
+          </label>
+
+          <label className="block">
+            <span className="mb-2 flex items-center gap-2 text-sm font-medium text-text-secondary">
+              <Lock className="h-4 w-4" />
+              {tx("密码", "Password")}
+            </span>
+            <input
+              type="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              required
+              placeholder={tx("请输入密码", "Enter your password")}
+              className="w-full rounded-xl border border-border bg-bg/50 px-4 py-3 text-sm text-text-primary placeholder-text-muted outline-none transition-all duration-200 focus:border-accent focus:bg-bg/80"
+            />
+          </label>
+        </div>
+
+        {/* Submit button */}
         <button
           type="submit"
           disabled={loading}
-          className="w-full rounded-lg bg-accent py-2 text-sm font-medium text-white transition hover:bg-accent-hover disabled:opacity-50"
+          className="gradient-button mt-8 flex w-full items-center justify-center gap-2 rounded-xl py-3.5 text-sm font-semibold text-white disabled:opacity-50 disabled:cursor-not-allowed"
         >
-          {loading
-            ? tx("登录中...", "Signing in...")
-            : tx("登录", "Sign in")}
+          {loading ? (
+            <>
+              <Loader2 className="h-4 w-4 animate-spin" />
+              {tx("登录中...", "Signing in...")}
+            </>
+          ) : (
+            <>
+              {tx("登录", "Sign in")}
+              <ArrowRight className="h-4 w-4" />
+            </>
+          )}
         </button>
       </form>
     </div>
