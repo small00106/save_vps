@@ -1,21 +1,21 @@
-@import "tailwindcss";
 @import url("https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,100..1000;1,9..40,100..1000&family=JetBrains+Mono:wght@400;500;600&display=swap");
+@import "tailwindcss";
 
 @theme {
-  --color-bg: #09090b;
-  --color-card: #18181b;
-  --color-border: #27272a;
-  --color-border-hover: #3f3f46;
-  --color-accent: #3b82f6;
-  --color-accent-hover: #2563eb;
-  --color-accent-muted: rgba(59, 130, 246, 0.15);
-  --color-accent-glow: rgba(59, 130, 246, 0.25);
-  --color-online: #22c55e;
-  --color-offline: #ef4444;
-  --color-warning: #f59e0b;
-  --color-text-primary: #fafafa;
-  --color-text-secondary: #a1a1aa;
-  --color-text-muted: #71717a;
+  --color-bg: var(--ui-bg);
+  --color-card: var(--ui-card);
+  --color-border: var(--ui-border);
+  --color-border-hover: var(--ui-border-hover);
+  --color-accent: var(--ui-accent);
+  --color-accent-hover: var(--ui-accent-hover);
+  --color-accent-muted: var(--ui-accent-muted);
+  --color-accent-glow: var(--ui-accent-glow);
+  --color-online: var(--ui-online);
+  --color-offline: var(--ui-offline);
+  --color-warning: var(--ui-warning);
+  --color-text-primary: var(--ui-text-primary);
+  --color-text-secondary: var(--ui-text-secondary);
+  --color-text-muted: var(--ui-text-muted);
 
   --font-sans: "DM Sans", ui-sans-serif, system-ui, sans-serif;
   --font-mono: "JetBrains Mono", ui-monospace, monospace;
@@ -23,6 +23,44 @@
   --animate-fade-in: fade-in 0.3s ease-out both;
   --animate-slide-up: slide-up 0.35s ease-out both;
   --animate-pulse-slow: pulse-slow 3s ease-in-out infinite;
+}
+
+:root {
+  color-scheme: light;
+  --ui-bg: #f5f7fb;
+  --ui-card: #ffffff;
+  --ui-border: #d8dee8;
+  --ui-border-hover: #c3cedd;
+  --ui-accent: #2563eb;
+  --ui-accent-hover: #1d4ed8;
+  --ui-accent-muted: rgba(37, 99, 235, 0.15);
+  --ui-accent-glow: rgba(37, 99, 235, 0.22);
+  --ui-online: #16a34a;
+  --ui-offline: #dc2626;
+  --ui-warning: #d97706;
+  --ui-text-primary: #111827;
+  --ui-text-secondary: #334155;
+  --ui-text-muted: #64748b;
+  --ui-glass-bg: rgba(255, 255, 255, 0.72);
+}
+
+html[data-theme="dark"] {
+  color-scheme: dark;
+  --ui-bg: #09090b;
+  --ui-card: #18181b;
+  --ui-border: #27272a;
+  --ui-border-hover: #3f3f46;
+  --ui-accent: #3b82f6;
+  --ui-accent-hover: #2563eb;
+  --ui-accent-muted: rgba(59, 130, 246, 0.15);
+  --ui-accent-glow: rgba(59, 130, 246, 0.25);
+  --ui-online: #22c55e;
+  --ui-offline: #ef4444;
+  --ui-warning: #f59e0b;
+  --ui-text-primary: #fafafa;
+  --ui-text-secondary: #a1a1aa;
+  --ui-text-muted: #71717a;
+  --ui-glass-bg: rgba(24, 24, 27, 0.72);
 }
 
 @keyframes fade-in {
@@ -41,7 +79,7 @@
 }
 
 @utility glass {
-  background: rgba(24, 24, 27, 0.7);
+  background: var(--ui-glass-bg);
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
   border: 1px solid var(--color-border);
@@ -66,6 +104,7 @@ body {
   font-family: var(--font-sans);
   background: var(--color-bg);
   color: var(--color-text-primary);
+  transition: background-color 0.2s ease, color 0.2s ease;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }

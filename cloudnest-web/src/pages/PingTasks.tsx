@@ -6,8 +6,10 @@ import {
   getPingTasks, createPingTask, getPingResults, deletePingTask,
   type PingTask, type PingResult,
 } from "../api/client";
+import { useI18n } from "../i18n/useI18n";
 
 export default function PingTasks() {
+  const { tx } = useI18n();
   const [tasks, setTasks] = useState<PingTask[]>([]);
   const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
@@ -70,7 +72,7 @@ export default function PingTasks() {
   };
 
   const handleDelete = async (taskId: number) => {
-    if (!confirm("确认删除该 Ping 任务？")) return;
+    if (!confirm(tx("确认删除该 Ping 任务？", "Delete this ping task?"))) return;
     setDeletingId(taskId);
     try {
       await deletePingTask(taskId);
@@ -89,7 +91,7 @@ export default function PingTasks() {
   if (loading) {
     return (
       <div className="flex items-center justify-center h-[60vh]">
-        <Loader2 className="w-6 h-6 text-[#3b82f6] animate-spin" />
+        <Loader2 className="h-6 w-6 animate-spin text-accent" />
       </div>
     );
   }
@@ -97,43 +99,43 @@ export default function PingTasks() {
   return (
     <div className="space-y-6 animate-[fadeIn_0.3s_ease-out]">
       <div className="flex items-center justify-between">
-        <h1 className="text-xl font-bold text-[#fafafa]">Ping Tasks</h1>
+        <h1 className="text-xl font-bold text-text-primary">{tx("Ping 任务", "Ping Tasks")}</h1>
         <button
           onClick={() => setShowForm(!showForm)}
-          className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-[#3b82f6] hover:bg-blue-600 text-white text-sm font-medium transition-colors"
+          className="flex items-center gap-2 rounded-lg bg-accent px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-accent-hover"
         >
           {showForm ? <X className="w-4 h-4" /> : <Plus className="w-4 h-4" />}
-          {showForm ? "Cancel" : "New Task"}
+          {showForm ? tx("取消", "Cancel") : tx("新建任务", "New Task")}
         </button>
       </div>
 
       {showForm && (
-        <div className="bg-[#18181b] border border-[#27272a] rounded-xl p-5 space-y-4">
+        <div className="space-y-4 rounded-xl border border-border bg-card p-5">
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
-              <label className="block text-xs text-[#a1a1aa] mb-1">Name</label>
+              <label className="mb-1 block text-xs text-text-secondary">{tx("名称", "Name")}</label>
               <input
                 value={formName}
                 onChange={(e) => setFormName(e.target.value)}
-                className="w-full h-9 px-3 rounded-lg bg-[#09090b] border border-[#27272a] text-white text-sm focus:outline-none focus:border-[#3b82f6] transition-colors"
-                placeholder="Ping Google DNS"
+                className="h-9 w-full rounded-lg border border-border bg-bg px-3 text-sm text-text-primary transition-colors focus:border-accent focus:outline-none"
+                placeholder={tx("例如：Ping Google DNS", "e.g. Ping Google DNS")}
               />
             </div>
             <div>
-              <label className="block text-xs text-[#a1a1aa] mb-1">Target</label>
+              <label className="mb-1 block text-xs text-text-secondary">{tx("目标地址", "Target")}</label>
               <input
                 value={formTarget}
                 onChange={(e) => setFormTarget(e.target.value)}
-                className="w-full h-9 px-3 rounded-lg bg-[#09090b] border border-[#27272a] text-white text-sm focus:outline-none focus:border-[#3b82f6] transition-colors"
+                className="h-9 w-full rounded-lg border border-border bg-bg px-3 text-sm text-text-primary transition-colors focus:border-accent focus:outline-none"
                 placeholder="8.8.8.8"
               />
             </div>
             <div>
-              <label className="block text-xs text-[#a1a1aa] mb-1">Type</label>
+              <label className="mb-1 block text-xs text-text-secondary">{tx("类型", "Type")}</label>
               <select
                 value={formType}
                 onChange={(e) => setFormType(e.target.value)}
-                className="w-full h-9 px-3 rounded-lg bg-[#09090b] border border-[#27272a] text-white text-sm focus:outline-none focus:border-[#3b82f6] transition-colors"
+                className="h-9 w-full rounded-lg border border-border bg-bg px-3 text-sm text-text-primary transition-colors focus:border-accent focus:outline-none"
               >
                 <option value="icmp">ICMP</option>
                 <option value="tcp">TCP</option>
@@ -141,54 +143,56 @@ export default function PingTasks() {
               </select>
             </div>
             <div>
-              <label className="block text-xs text-[#a1a1aa] mb-1">Interval (seconds)</label>
+              <label className="mb-1 block text-xs text-text-secondary">
+                {tx("间隔（秒）", "Interval (seconds)")}
+              </label>
               <input
                 type="number"
                 value={formInterval}
                 onChange={(e) => setFormInterval(Number(e.target.value))}
                 min={5}
-                className="w-full h-9 px-3 rounded-lg bg-[#09090b] border border-[#27272a] text-white text-sm focus:outline-none focus:border-[#3b82f6] transition-colors"
+                className="h-9 w-full rounded-lg border border-border bg-bg px-3 text-sm text-text-primary transition-colors focus:border-accent focus:outline-none"
               />
             </div>
           </div>
           <button
             onClick={handleCreate}
             disabled={submitting || !formName || !formTarget}
-            className="flex items-center gap-2 px-4 py-2 rounded-lg bg-[#3b82f6] hover:bg-blue-600 text-white text-sm font-medium transition-colors disabled:opacity-50"
+            className="flex items-center gap-2 rounded-lg bg-accent px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-accent-hover disabled:opacity-50"
           >
             {submitting && <Loader2 className="w-4 h-4 animate-spin" />}
-            Create Task
+            {tx("创建任务", "Create Task")}
           </button>
         </div>
       )}
 
       {tasks.length === 0 ? (
-        <div className="flex flex-col items-center justify-center py-16 text-[#71717a]">
+        <div className="flex flex-col items-center justify-center py-16 text-text-muted">
           <Target className="w-10 h-10 mb-3" />
-          <p className="text-sm">No ping tasks yet</p>
+          <p className="text-sm">{tx("暂无 Ping 任务", "No ping tasks yet")}</p>
         </div>
       ) : (
         <div className="space-y-3">
           {tasks.map((task) => (
             <div
               key={task.id}
-              className="bg-[#18181b] border border-[#27272a] rounded-xl overflow-hidden"
+              className="overflow-hidden rounded-xl border border-border bg-card"
             >
-              <div className="flex items-center gap-3 px-5 py-4 hover:bg-[#232329] transition-colors">
+              <div className="flex items-center gap-3 px-5 py-4 transition-colors hover:bg-border/50">
                 <button
                   onClick={() => toggleExpand(task.id)}
                   className="flex items-center gap-4 flex-1 min-w-0 text-left"
                 >
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2 mb-1">
-                      <span className="text-[#fafafa] font-medium text-sm">{task.name}</span>
+                      <span className="text-sm font-medium text-text-primary">{task.name}</span>
                       {!task.enabled && (
-                        <span className="px-2 py-0.5 rounded text-[10px] bg-[#27272a] text-[#71717a]">
-                          Disabled
+                        <span className="rounded bg-border px-2 py-0.5 text-[10px] text-text-muted">
+                          {tx("已禁用", "Disabled")}
                         </span>
                       )}
                     </div>
-                    <div className="flex items-center gap-4 text-xs text-[#71717a]">
+                    <div className="flex items-center gap-4 text-xs text-text-muted">
                       <span className="flex items-center gap-1">
                         <Target className="w-3 h-3" />
                         {task.target}
@@ -200,16 +204,16 @@ export default function PingTasks() {
                     </div>
                   </div>
                   {expandedId === task.id ? (
-                    <ChevronUp className="w-4 h-4 text-[#71717a] shrink-0" />
+                    <ChevronUp className="h-4 w-4 shrink-0 text-text-muted" />
                   ) : (
-                    <ChevronDown className="w-4 h-4 text-[#71717a] shrink-0" />
+                    <ChevronDown className="h-4 w-4 shrink-0 text-text-muted" />
                   )}
                 </button>
                 <button
                   onClick={() => handleDelete(task.id)}
                   disabled={deletingId === task.id}
-                  className="p-1.5 rounded-md text-[#71717a] hover:text-[#ef4444] hover:bg-[#ef4444]/10 transition-colors disabled:opacity-50"
-                  title="Delete task"
+                  className="rounded-md p-1.5 text-text-muted transition-colors hover:bg-offline/10 hover:text-offline disabled:opacity-50"
+                  title={tx("删除任务", "Delete task")}
                 >
                   {deletingId === task.id ? (
                     <Loader2 className="w-4 h-4 animate-spin" />
@@ -220,26 +224,28 @@ export default function PingTasks() {
               </div>
 
               {expandedId === task.id && (
-                <div className="border-t border-[#27272a] px-5 py-3">
+                <div className="border-t border-border px-5 py-3">
                   {resultsLoading ? (
                     <div className="flex items-center justify-center py-6">
-                      <Loader2 className="w-4 h-4 text-[#3b82f6] animate-spin" />
+                      <Loader2 className="h-4 w-4 animate-spin text-accent" />
                     </div>
                   ) : results.length === 0 ? (
-                    <p className="text-sm text-[#71717a] py-3 text-center">No results yet</p>
+                    <p className="py-3 text-center text-sm text-text-muted">
+                      {tx("暂无结果", "No results yet")}
+                    </p>
                   ) : (
                     <div className="max-h-64 overflow-y-auto space-y-1">
                       {results.slice(0, 50).map((r) => (
                         <div key={r.id} className="flex items-center gap-3 py-1.5 text-sm">
                           {r.success ? (
-                            <CheckCircle2 className="w-3.5 h-3.5 text-[#22c55e] shrink-0" />
+                            <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-online" />
                           ) : (
-                            <XCircle className="w-3.5 h-3.5 text-[#ef4444] shrink-0" />
+                            <XCircle className="h-3.5 w-3.5 shrink-0 text-offline" />
                           )}
-                          <span className="text-[#a1a1aa] font-mono text-xs">
+                          <span className="font-mono text-xs text-text-secondary">
                             {new Date(r.timestamp).toLocaleTimeString()}
                           </span>
-                          <span className="text-[#fafafa] text-xs">
+                          <span className="text-xs text-text-primary">
                             {r.latency.toFixed(1)} ms
                           </span>
                         </div>

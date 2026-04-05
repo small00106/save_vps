@@ -7,6 +7,7 @@ import {
   getAlertChannels, createAlertChannel, updateAlertChannel,
   type AlertRule, type AlertChannel,
 } from "../api/client";
+import { useI18n } from "../i18n/useI18n";
 
 const CHANNEL_TYPE_STYLES: Record<string, { bg: string; text: string; icon: typeof Send }> = {
   telegram: { bg: "bg-blue-500/10", text: "text-[#3b82f6]", icon: Send },
@@ -20,6 +21,7 @@ const METRICS = ["cpu", "mem", "disk", "offline"];
 const OPERATORS = ["gt", "lt"];
 
 export default function Alerts() {
+  const { tx } = useI18n();
   const [rules, setRules] = useState<AlertRule[]>([]);
   const [channels, setChannels] = useState<AlertChannel[]>([]);
   const [loading, setLoading] = useState(true);
@@ -165,7 +167,7 @@ export default function Alerts() {
     try {
       JSON.parse(editChannelConfig);
     } catch {
-      alert("配置必须是合法 JSON");
+      alert(tx("配置必须是合法 JSON", "Config must be valid JSON"));
       return;
     }
     setChannelUpdating(true);
@@ -188,13 +190,13 @@ export default function Alerts() {
   if (loading) {
     return (
       <div className="flex items-center justify-center h-[60vh]">
-        <Loader2 className="w-6 h-6 text-[#3b82f6] animate-spin" />
+        <Loader2 className="h-6 w-6 animate-spin text-accent" />
       </div>
     );
   }
 
   const inputClass =
-    "w-full h-9 px-3 rounded-lg bg-[#09090b] border border-[#27272a] text-white text-sm focus:outline-none focus:border-[#3b82f6] transition-colors";
+    "h-9 w-full rounded-lg border border-border bg-bg px-3 text-sm text-text-primary transition-colors focus:border-accent focus:outline-none";
 
   return (
     <div className="space-y-8 animate-[fadeIn_0.3s_ease-out]">
@@ -202,31 +204,31 @@ export default function Alerts() {
       <section>
         <div className="flex items-center justify-between mb-4">
           <div className="flex items-center gap-2">
-            <Bell className="w-5 h-5 text-[#3b82f6]" />
-            <h2 className="text-lg font-bold text-[#fafafa]">Alert Rules</h2>
+            <Bell className="h-5 w-5 text-accent" />
+            <h2 className="text-lg font-bold text-text-primary">{tx("告警规则", "Alert Rules")}</h2>
           </div>
           <button
             onClick={() => setShowRuleForm(!showRuleForm)}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#3b82f6] hover:bg-blue-600 text-white text-sm font-medium transition-colors"
+            className="flex items-center gap-1.5 rounded-lg bg-accent px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-accent-hover"
           >
             {showRuleForm ? <X className="w-4 h-4" /> : <Plus className="w-4 h-4" />}
-            {showRuleForm ? "Cancel" : "New Rule"}
+            {showRuleForm ? tx("取消", "Cancel") : tx("新建规则", "New Rule")}
           </button>
         </div>
 
         {showRuleForm && (
-          <div className="bg-[#18181b] border border-[#27272a] rounded-xl p-5 mb-4 space-y-4">
+          <div className="mb-4 space-y-4 rounded-xl border border-border bg-card p-5">
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
               <div>
-                <label className="block text-xs text-[#a1a1aa] mb-1">Name</label>
-                <input value={ruleName} onChange={(e) => setRuleName(e.target.value)} className={inputClass} placeholder="High CPU Alert" />
+                <label className="mb-1 block text-xs text-text-secondary">{tx("名称", "Name")}</label>
+                <input value={ruleName} onChange={(e) => setRuleName(e.target.value)} className={inputClass} placeholder={tx("高 CPU 告警", "High CPU Alert")} />
               </div>
               <div>
-                <label className="block text-xs text-[#a1a1aa] mb-1">Node UUID (optional)</label>
-                <input value={ruleNodeUuid} onChange={(e) => setRuleNodeUuid(e.target.value)} className={inputClass} placeholder="All nodes if empty" />
+                <label className="mb-1 block text-xs text-text-secondary">{tx("节点 UUID（可选）", "Node UUID (optional)")}</label>
+                <input value={ruleNodeUuid} onChange={(e) => setRuleNodeUuid(e.target.value)} className={inputClass} placeholder={tx("留空表示全部节点", "All nodes if empty")} />
               </div>
               <div>
-                <label className="block text-xs text-[#a1a1aa] mb-1">Metric</label>
+                <label className="mb-1 block text-xs text-text-secondary">{tx("指标", "Metric")}</label>
                 <select value={ruleMetric} onChange={(e) => setRuleMetric(e.target.value)} className={inputClass}>
                   {METRICS.map((m) => (
                     <option key={m} value={m}>{m}</option>
@@ -234,7 +236,7 @@ export default function Alerts() {
                 </select>
               </div>
               <div>
-                <label className="block text-xs text-[#a1a1aa] mb-1">Operator</label>
+                <label className="mb-1 block text-xs text-text-secondary">{tx("运算符", "Operator")}</label>
                 <select value={ruleOperator} onChange={(e) => setRuleOperator(e.target.value)} className={inputClass}>
                   {OPERATORS.map((o) => (
                     <option key={o} value={o}>{o}</option>
@@ -242,17 +244,17 @@ export default function Alerts() {
                 </select>
               </div>
               <div>
-                <label className="block text-xs text-[#a1a1aa] mb-1">Threshold</label>
+                <label className="mb-1 block text-xs text-text-secondary">{tx("阈值", "Threshold")}</label>
                 <input type="number" value={ruleThreshold} onChange={(e) => setRuleThreshold(Number(e.target.value))} className={inputClass} />
               </div>
               <div>
-                <label className="block text-xs text-[#a1a1aa] mb-1">Duration (s)</label>
+                <label className="mb-1 block text-xs text-text-secondary">{tx("持续时间（秒）", "Duration (s)")}</label>
                 <input type="number" value={ruleDuration} onChange={(e) => setRuleDuration(Number(e.target.value))} className={inputClass} />
               </div>
               <div>
-                <label className="block text-xs text-[#a1a1aa] mb-1">Channel</label>
+                <label className="mb-1 block text-xs text-text-secondary">{tx("通知渠道", "Channel")}</label>
                 <select value={ruleChannelId} onChange={(e) => setRuleChannelId(Number(e.target.value))} className={inputClass}>
-                  <option value={0}>None</option>
+                  <option value={0}>{tx("无", "None")}</option>
                   {channels.map((c) => (
                     <option key={c.id} value={c.id}>{c.name}</option>
                   ))}
@@ -262,40 +264,40 @@ export default function Alerts() {
             <button
               onClick={handleCreateRule}
               disabled={ruleSubmitting || !ruleName}
-              className="flex items-center gap-2 px-4 py-2 rounded-lg bg-[#3b82f6] hover:bg-blue-600 text-white text-sm font-medium transition-colors disabled:opacity-50"
+              className="flex items-center gap-2 rounded-lg bg-accent px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-accent-hover disabled:opacity-50"
             >
               {ruleSubmitting && <Loader2 className="w-4 h-4 animate-spin" />}
-              Create Rule
+              {tx("创建规则", "Create Rule")}
             </button>
           </div>
         )}
 
         {rules.length === 0 ? (
-          <div className="bg-[#18181b] border border-[#27272a] rounded-xl p-8 text-center text-[#71717a] text-sm">
-            No alert rules configured
+          <div className="rounded-xl border border-border bg-card p-8 text-center text-sm text-text-muted">
+            {tx("尚未配置告警规则", "No alert rules configured")}
           </div>
         ) : (
-          <div className="bg-[#18181b] border border-[#27272a] rounded-xl overflow-hidden divide-y divide-[#27272a]">
+          <div className="overflow-hidden rounded-xl border border-border bg-card divide-y divide-border">
             {rules.map((rule) => (
               <div
                 key={rule.id}
-                className="flex items-center gap-4 px-5 py-3 hover:bg-[#232329] transition-colors"
+                className="flex items-center gap-4 px-5 py-3 transition-colors hover:bg-border/50"
               >
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2 mb-0.5">
-                    <span className="text-sm text-[#fafafa] font-medium">{rule.name}</span>
-                    <span className="px-2 py-0.5 rounded text-[10px] font-medium bg-blue-500/10 text-[#3b82f6]">
+                    <span className="text-sm font-medium text-text-primary">{rule.name}</span>
+                    <span className="rounded bg-accent/10 px-2 py-0.5 text-[10px] font-medium text-accent">
                       {rule.metric}
                     </span>
                   </div>
-                  <span className="text-xs text-[#71717a]">
-                    {rule.operator} {rule.threshold} for {rule.duration}s
+                  <span className="text-xs text-text-muted">
+                    {rule.operator} {rule.threshold} {tx("持续", "for")} {rule.duration}s
                   </span>
                 </div>
                 <button
                   onClick={() => handleToggleRule(rule)}
                   className={`relative w-9 h-5 rounded-full transition-colors ${
-                    rule.enabled ? "bg-[#3b82f6]" : "bg-[#27272a]"
+                    rule.enabled ? "bg-accent" : "bg-border"
                   }`}
                 >
                   <span
@@ -306,7 +308,7 @@ export default function Alerts() {
                 </button>
                 <button
                   onClick={() => handleDeleteRule(rule.id)}
-                  className="text-[#71717a] hover:text-[#ef4444] transition-colors"
+                  className="text-text-muted transition-colors hover:text-offline"
                 >
                   <Trash2 className="w-4 h-4" />
                 </button>
@@ -320,33 +322,35 @@ export default function Alerts() {
       <section>
         <div className="flex items-center justify-between mb-4">
           <div className="flex items-center gap-2">
-            <Send className="w-5 h-5 text-[#a855f7]" />
-            <h2 className="text-lg font-bold text-[#fafafa]">Notification Channels</h2>
+            <Send className="h-5 w-5 text-[#a855f7]" />
+            <h2 className="text-lg font-bold text-text-primary">
+              {tx("通知渠道", "Notification Channels")}
+            </h2>
           </div>
           <button
             onClick={() => setShowChannelForm(!showChannelForm)}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#3b82f6] hover:bg-blue-600 text-white text-sm font-medium transition-colors"
+            className="flex items-center gap-1.5 rounded-lg bg-accent px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-accent-hover"
           >
             {showChannelForm ? <X className="w-4 h-4" /> : <Plus className="w-4 h-4" />}
-            {showChannelForm ? "Cancel" : "New Channel"}
+            {showChannelForm ? tx("取消", "Cancel") : tx("新建渠道", "New Channel")}
           </button>
         </div>
 
         {showChannelForm && (
-          <div className="bg-[#18181b] border border-[#27272a] rounded-xl p-5 mb-4 space-y-4">
+          <div className="mb-4 space-y-4 rounded-xl border border-border bg-card p-5">
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div>
-                <label className="block text-xs text-[#a1a1aa] mb-1">Name</label>
-                <input value={channelName} onChange={(e) => setChannelName(e.target.value)} className={inputClass} placeholder="Ops Team" />
+                <label className="mb-1 block text-xs text-text-secondary">{tx("名称", "Name")}</label>
+                <input value={channelName} onChange={(e) => setChannelName(e.target.value)} className={inputClass} placeholder={tx("运维团队", "Ops Team")} />
               </div>
               <div>
-                <label className="block text-xs text-[#a1a1aa] mb-1">Type</label>
+                <label className="mb-1 block text-xs text-text-secondary">{tx("类型", "Type")}</label>
                 <select value={channelType} onChange={(e) => setChannelType(e.target.value as typeof channelType)} className={inputClass}>
-                  <option value="webhook">Webhook</option>
-                  <option value="telegram">Telegram</option>
-                  <option value="email">Email</option>
-                  <option value="bark">Bark</option>
-                  <option value="serverchan">ServerChan</option>
+                  <option value="webhook">{tx("Webhook", "Webhook")}</option>
+                  <option value="telegram">{tx("Telegram", "Telegram")}</option>
+                  <option value="email">{tx("邮件", "Email")}</option>
+                  <option value="bark">{tx("Bark", "Bark")}</option>
+                  <option value="serverchan">{tx("ServerChan", "ServerChan")}</option>
                 </select>
               </div>
             </div>
@@ -354,7 +358,9 @@ export default function Alerts() {
             {/* Webhook / Bark */}
             {(channelType === "webhook" || channelType === "bark") && (
               <div>
-                <label className="block text-xs text-[#a1a1aa] mb-1">URL</label>
+                <label className="mb-1 block text-xs text-text-secondary">
+                  {tx("地址 URL", "URL")}
+                </label>
                 <input value={channelConfigUrl} onChange={(e) => setChannelConfigUrl(e.target.value)} className={inputClass} placeholder="https://hooks.example.com/..." />
               </div>
             )}
@@ -363,11 +369,15 @@ export default function Alerts() {
             {channelType === "telegram" && (
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-xs text-[#a1a1aa] mb-1">Bot Token</label>
+                  <label className="mb-1 block text-xs text-text-secondary">
+                    {tx("Bot Token", "Bot Token")}
+                  </label>
                   <input value={channelConfigBotToken} onChange={(e) => setChannelConfigBotToken(e.target.value)} className={inputClass} placeholder="123456:ABC-DEF..." />
                 </div>
                 <div>
-                  <label className="block text-xs text-[#a1a1aa] mb-1">Chat ID</label>
+                  <label className="mb-1 block text-xs text-text-secondary">
+                    {tx("Chat ID", "Chat ID")}
+                  </label>
                   <input value={channelConfigChatId} onChange={(e) => setChannelConfigChatId(e.target.value)} className={inputClass} placeholder="-1001234567890" />
                 </div>
               </div>
@@ -377,27 +387,31 @@ export default function Alerts() {
             {channelType === "email" && (
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                 <div>
-                  <label className="block text-xs text-[#a1a1aa] mb-1">SMTP Host</label>
+                  <label className="mb-1 block text-xs text-text-secondary">
+                    {tx("SMTP 主机", "SMTP Host")}
+                  </label>
                   <input value={channelConfigSmtpHost} onChange={(e) => setChannelConfigSmtpHost(e.target.value)} className={inputClass} placeholder="smtp.gmail.com" />
                 </div>
                 <div>
-                  <label className="block text-xs text-[#a1a1aa] mb-1">SMTP Port</label>
+                  <label className="mb-1 block text-xs text-text-secondary">
+                    {tx("SMTP 端口", "SMTP Port")}
+                  </label>
                   <input value={channelConfigSmtpPort} onChange={(e) => setChannelConfigSmtpPort(e.target.value)} className={inputClass} placeholder="587" />
                 </div>
                 <div>
-                  <label className="block text-xs text-[#a1a1aa] mb-1">Username</label>
+                  <label className="mb-1 block text-xs text-text-secondary">{tx("用户名", "Username")}</label>
                   <input value={channelConfigSmtpUser} onChange={(e) => setChannelConfigSmtpUser(e.target.value)} className={inputClass} />
                 </div>
                 <div>
-                  <label className="block text-xs text-[#a1a1aa] mb-1">Password</label>
+                  <label className="mb-1 block text-xs text-text-secondary">{tx("密码", "Password")}</label>
                   <input type="password" value={channelConfigSmtpPass} onChange={(e) => setChannelConfigSmtpPass(e.target.value)} className={inputClass} />
                 </div>
                 <div>
-                  <label className="block text-xs text-[#a1a1aa] mb-1">From</label>
+                  <label className="mb-1 block text-xs text-text-secondary">{tx("发件人", "From")}</label>
                   <input value={channelConfigFrom} onChange={(e) => setChannelConfigFrom(e.target.value)} className={inputClass} placeholder="alerts@example.com" />
                 </div>
                 <div>
-                  <label className="block text-xs text-[#a1a1aa] mb-1">To</label>
+                  <label className="mb-1 block text-xs text-text-secondary">{tx("收件人", "To")}</label>
                   <input value={channelConfigTo} onChange={(e) => setChannelConfigTo(e.target.value)} className={inputClass} placeholder="admin@example.com" />
                 </div>
               </div>
@@ -406,7 +420,9 @@ export default function Alerts() {
             {/* ServerChan */}
             {channelType === "serverchan" && (
               <div>
-                <label className="block text-xs text-[#a1a1aa] mb-1">SendKey</label>
+                <label className="mb-1 block text-xs text-text-secondary">
+                  {tx("SendKey", "SendKey")}
+                </label>
                 <input value={channelConfigSendKey} onChange={(e) => setChannelConfigSendKey(e.target.value)} className={inputClass} placeholder="SCT1234567890" />
               </div>
             )}
@@ -414,27 +430,27 @@ export default function Alerts() {
             <button
               onClick={handleCreateChannel}
               disabled={channelSubmitting || !channelName}
-              className="flex items-center gap-2 px-4 py-2 rounded-lg bg-[#3b82f6] hover:bg-blue-600 text-white text-sm font-medium transition-colors disabled:opacity-50"
+              className="flex items-center gap-2 rounded-lg bg-accent px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-accent-hover disabled:opacity-50"
             >
               {channelSubmitting && <Loader2 className="w-4 h-4 animate-spin" />}
-              Create Channel
+              {tx("创建渠道", "Create Channel")}
             </button>
           </div>
         )}
 
         {editingChannelId && (
-          <div className="bg-[#18181b] border border-[#27272a] rounded-xl p-5 mb-4 space-y-4">
+          <div className="mb-4 space-y-4 rounded-xl border border-border bg-card p-5">
             <div className="flex items-center justify-between">
-              <h3 className="text-sm font-semibold text-[#fafafa]">Edit Channel</h3>
+              <h3 className="text-sm font-semibold text-text-primary">{tx("编辑渠道", "Edit Channel")}</h3>
               <button
                 onClick={() => setEditingChannelId(null)}
-                className="p-1 rounded text-[#71717a] hover:text-[#fafafa] transition-colors"
+                className="rounded p-1 text-text-muted transition-colors hover:text-text-primary"
               >
                 <X className="w-4 h-4" />
               </button>
             </div>
             <div>
-              <label className="block text-xs text-[#a1a1aa] mb-1">Name</label>
+              <label className="mb-1 block text-xs text-text-secondary">{tx("名称", "Name")}</label>
               <input
                 value={editChannelName}
                 onChange={(e) => setEditChannelName(e.target.value)}
@@ -442,27 +458,29 @@ export default function Alerts() {
               />
             </div>
             <div>
-              <label className="block text-xs text-[#a1a1aa] mb-1">Config (JSON)</label>
+              <label className="mb-1 block text-xs text-text-secondary">
+                {tx("配置（JSON）", "Config (JSON)")}
+              </label>
               <textarea
                 value={editChannelConfig}
                 onChange={(e) => setEditChannelConfig(e.target.value)}
-                className="w-full min-h-32 px-3 py-2 rounded-lg bg-[#09090b] border border-[#27272a] text-white text-xs font-mono focus:outline-none focus:border-[#3b82f6] transition-colors"
+                className="min-h-32 w-full rounded-lg border border-border bg-bg px-3 py-2 font-mono text-xs text-text-primary transition-colors focus:border-accent focus:outline-none"
               />
             </div>
             <button
               onClick={handleUpdateChannel}
               disabled={channelUpdating || !editChannelName.trim()}
-              className="flex items-center gap-2 px-4 py-2 rounded-lg bg-[#3b82f6] hover:bg-blue-600 text-white text-sm font-medium transition-colors disabled:opacity-50"
+              className="flex items-center gap-2 rounded-lg bg-accent px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-accent-hover disabled:opacity-50"
             >
               {channelUpdating && <Loader2 className="w-4 h-4 animate-spin" />}
-              Save Channel
+              {tx("保存渠道", "Save Channel")}
             </button>
           </div>
         )}
 
         {channels.length === 0 ? (
-          <div className="bg-[#18181b] border border-[#27272a] rounded-xl p-8 text-center text-[#71717a] text-sm">
-            No notification channels configured
+          <div className="rounded-xl border border-border bg-card p-8 text-center text-sm text-text-muted">
+            {tx("尚未配置通知渠道", "No notification channels configured")}
           </div>
         ) : (
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -472,19 +490,19 @@ export default function Alerts() {
               return (
                 <div
                   key={ch.id}
-                  className="bg-[#18181b] border border-[#27272a] rounded-xl p-4 flex items-center gap-3"
+                  className="flex items-center gap-3 rounded-xl border border-border bg-card p-4"
                 >
                   <div className={`w-9 h-9 rounded-lg flex items-center justify-center ${style.bg}`}>
                     <Icon className={`w-4 h-4 ${style.text}`} />
                   </div>
                   <div className="min-w-0">
-                    <p className="text-sm text-[#fafafa] font-medium">{ch.name}</p>
+                    <p className="text-sm font-medium text-text-primary">{ch.name}</p>
                     <p className={`text-xs ${style.text}`}>{ch.type}</p>
                   </div>
                   <button
                     onClick={() => openEditChannel(ch)}
-                    className="ml-auto p-1.5 rounded-md text-[#71717a] hover:text-[#3b82f6] hover:bg-[#3b82f6]/10 transition-colors"
-                    title="Edit channel"
+                    className="ml-auto rounded-md p-1.5 text-text-muted transition-colors hover:bg-accent/10 hover:text-accent"
+                    title={tx("编辑渠道", "Edit channel")}
                   >
                     <Pencil className="w-4 h-4" />
                   </button>

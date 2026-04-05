@@ -5,6 +5,7 @@ import {
   Activity,
   Bell,
   ScrollText,
+  Settings,
   LogOut,
   Menu,
   X,
@@ -12,20 +13,33 @@ import {
 import { useState } from "react";
 import { useAuth } from "../hooks/useAuth";
 import { useWebSocket } from "../hooks/useWebSocket";
+import { usePreferences, type LocaleMode, type ThemeMode } from "../contexts/PreferencesContext";
+import { useI18n } from "../i18n/useI18n";
 
 const navItems = [
-  { to: "/", icon: LayoutDashboard, label: "Dashboard" },
-  { to: "/files", icon: FolderOpen, label: "Files" },
-  { to: "/ping", icon: Activity, label: "Ping" },
-  { to: "/alerts", icon: Bell, label: "Alerts" },
-  { to: "/audit", icon: ScrollText, label: "Audit" },
+  { to: "/", icon: LayoutDashboard, labelKey: "nav.dashboard" },
+  { to: "/files", icon: FolderOpen, labelKey: "nav.files" },
+  { to: "/ping", icon: Activity, labelKey: "nav.ping" },
+  { to: "/alerts", icon: Bell, labelKey: "nav.alerts" },
+  { to: "/audit", icon: ScrollText, labelKey: "nav.audit" },
+  { to: "/settings", icon: Settings, labelKey: "nav.settings" },
 ] as const;
 
 export default function Layout() {
   const { logout } = useAuth();
   const { connected } = useWebSocket();
+  const { themeMode, setThemeMode } = usePreferences();
+  const { t, localeMode, setLocaleMode } = useI18n();
   const [mobileOpen, setMobileOpen] = useState(false);
   const location = useLocation();
+
+  const handleLocaleChange = (event: React.ChangeEvent<HTMLSelectElement>) => {
+    setLocaleMode(event.target.value as LocaleMode);
+  };
+
+  const handleThemeChange = (event: React.ChangeEvent<HTMLSelectElement>) => {
+    setThemeMode(event.target.value as ThemeMode);
+  };
 
   return (
     <div className="flex h-dvh overflow-hidden bg-bg">
@@ -52,7 +66,7 @@ export default function Layout() {
 
         {/* Nav items */}
         <nav className="flex flex-1 flex-col items-center gap-1">
-          {navItems.map(({ to, icon: Icon, label }) => (
+          {navItems.map(({ to, icon: Icon, labelKey }) => (
             <NavLink
               key={to}
               to={to}
@@ -68,7 +82,7 @@ export default function Layout() {
             >
               <Icon size={20} />
               <span className="pointer-events-none absolute left-14 hidden rounded-md bg-card px-2 py-1 text-xs text-text-primary shadow-lg border border-border group-hover:block">
-                {label}
+                {t(labelKey)}
               </span>
             </NavLink>
           ))}
@@ -94,16 +108,40 @@ export default function Layout() {
             {mobileOpen ? <X size={18} /> : <Menu size={18} />}
           </button>
           <span className="text-sm font-semibold tracking-tight text-text-primary">
-            CloudNest
+            {t("app.name")}
           </span>
           <div className="flex-1" />
+          <div className="hidden items-center gap-2 text-xs text-text-muted lg:flex">
+            <label className="text-text-muted">{t("header.language")}</label>
+            <select
+              value={localeMode}
+              onChange={handleLocaleChange}
+              className="h-8 rounded-lg border border-border bg-card px-2 text-xs text-text-primary outline-none transition focus:border-accent"
+            >
+              <option value="system">{t("option.system")}</option>
+              <option value="zh">{t("option.chinese")}</option>
+              <option value="en">{t("option.english")}</option>
+            </select>
+          </div>
+          <div className="hidden items-center gap-2 text-xs text-text-muted lg:flex">
+            <label className="text-text-muted">{t("header.theme")}</label>
+            <select
+              value={themeMode}
+              onChange={handleThemeChange}
+              className="h-8 rounded-lg border border-border bg-card px-2 text-xs text-text-primary outline-none transition focus:border-accent"
+            >
+              <option value="system">{t("option.system")}</option>
+              <option value="light">{t("option.light")}</option>
+              <option value="dark">{t("option.dark")}</option>
+            </select>
+          </div>
           <div className="flex items-center gap-2 text-xs text-text-muted">
             <span
               className={`h-2 w-2 rounded-full ${
                 connected ? "bg-online animate-pulse-slow" : "bg-offline"
               }`}
             />
-            {connected ? "Connected" : "Disconnected"}
+            {connected ? t("header.connected") : t("header.disconnected")}
           </div>
         </header>
 

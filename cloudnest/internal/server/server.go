@@ -53,6 +53,7 @@ func SetupRouter() *gin.Engine {
 		authed.Use(middleware.AuthRequired())
 		{
 			authed.GET("/auth/me", authAPI.Me)
+			authed.POST("/auth/change-password", authAPI.ChangePassword)
 
 			// Nodes
 			authed.GET("/nodes", nodesAPI.List)

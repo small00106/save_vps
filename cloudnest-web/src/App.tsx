@@ -1,5 +1,6 @@
 import { Routes, Route, Navigate } from "react-router-dom";
 import { AuthProvider, useAuth } from "./hooks/useAuth";
+import { PreferencesProvider } from "./contexts/PreferencesContext";
 import Layout from "./components/Layout";
 import { lazy, Suspense, type ReactNode } from "react";
 
@@ -11,6 +12,7 @@ const Terminal = lazy(() => import("./pages/Terminal"));
 const PingTasks = lazy(() => import("./pages/PingTasks"));
 const Alerts = lazy(() => import("./pages/Alerts"));
 const AuditLog = lazy(() => import("./pages/AuditLog"));
+const SettingsPage = lazy(() => import("./pages/SettingsPage"));
 
 function Loading() {
   return (
@@ -46,6 +48,7 @@ function AppRoutes() {
           <Route path="ping" element={<PingTasks />} />
           <Route path="alerts" element={<Alerts />} />
           <Route path="audit" element={<AuditLog />} />
+          <Route path="settings" element={<SettingsPage />} />
         </Route>
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
@@ -55,8 +58,10 @@ function AppRoutes() {
 
 export default function App() {
   return (
-    <AuthProvider>
-      <AppRoutes />
-    </AuthProvider>
+    <PreferencesProvider>
+      <AuthProvider>
+        <AppRoutes />
+      </AuthProvider>
+    </PreferencesProvider>
   );
 }

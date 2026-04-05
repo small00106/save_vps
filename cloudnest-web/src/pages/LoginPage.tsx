@@ -1,9 +1,11 @@
 import { useState } from "react";
 import { useAuth } from "../hooks/useAuth";
 import { Lock } from "lucide-react";
+import { useI18n } from "../i18n/useI18n";
 
 export default function LoginPage() {
   const { login } = useAuth();
+  const { tx } = useI18n();
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
@@ -16,7 +18,7 @@ export default function LoginPage() {
     try {
       await login(username, password);
     } catch {
-      setError("Invalid credentials");
+      setError(tx("用户名或密码错误", "Invalid credentials"));
     } finally {
       setLoading(false);
     }
@@ -33,7 +35,9 @@ export default function LoginPage() {
             <Lock size={24} />
           </div>
           <h1 className="text-xl font-semibold text-text-primary">CloudNest</h1>
-          <p className="text-sm text-text-muted">Sign in to your dashboard</p>
+          <p className="text-sm text-text-muted">
+            {tx("登录后进入控制台", "Sign in to your dashboard")}
+          </p>
         </div>
         {error && (
           <div className="mb-4 rounded-lg bg-offline/10 px-3 py-2 text-sm text-offline">
@@ -41,7 +45,9 @@ export default function LoginPage() {
           </div>
         )}
         <label className="mb-4 block">
-          <span className="mb-1 block text-xs text-text-muted">Username</span>
+          <span className="mb-1 block text-xs text-text-muted">
+            {tx("用户名", "Username")}
+          </span>
           <input
             type="text"
             value={username}
@@ -52,7 +58,9 @@ export default function LoginPage() {
           />
         </label>
         <label className="mb-6 block">
-          <span className="mb-1 block text-xs text-text-muted">Password</span>
+          <span className="mb-1 block text-xs text-text-muted">
+            {tx("密码", "Password")}
+          </span>
           <input
             type="password"
             value={password}
@@ -66,7 +74,9 @@ export default function LoginPage() {
           disabled={loading}
           className="w-full rounded-lg bg-accent py-2 text-sm font-medium text-white transition hover:bg-accent-hover disabled:opacity-50"
         >
-          {loading ? "Signing in..." : "Sign in"}
+          {loading
+            ? tx("登录中...", "Signing in...")
+            : tx("登录", "Sign in")}
         </button>
       </form>
     </div>

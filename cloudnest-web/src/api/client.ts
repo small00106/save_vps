@@ -227,6 +227,13 @@ export function getMe() {
   return api.get<{ username: string }>("/auth/me");
 }
 
+export function changePassword(currentPassword: string, newPassword: string) {
+  return api.post<{ message: string }>("/auth/change-password", {
+    current_password: currentPassword,
+    new_password: newPassword,
+  });
+}
+
 // ========================
 // Nodes
 // ========================
