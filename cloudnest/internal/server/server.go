@@ -304,6 +304,17 @@ func serveAgentBinary(c *gin.Context) {
 	osName := c.Param("os")
 	arch := c.Param("arch")
 
+	// Whitelist validation to prevent path traversal
+	allowedOS := map[string]bool{"linux": true}
+	allowedArch := map[string]bool{"amd64": true, "arm64": true}
+	if !allowedOS[osName] || !allowedArch[arch] {
+		c.JSON(http.StatusNotFound, gin.H{
+			"error": "unsupported platform",
+			"hint":  "supported: linux/amd64, linux/arm64",
+		})
+		return
+	}
+
 	// Look for binary in data directory
 	binaryName := "cloudnest-agent-" + osName + "-" + arch
 	binaryPath := "./data/binaries/" + binaryName

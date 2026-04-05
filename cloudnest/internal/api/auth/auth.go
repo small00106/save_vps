@@ -64,6 +64,11 @@ func Login(c *gin.Context) {
 // Logout handles POST /api/auth/logout
 func Logout(c *gin.Context) {
 	token, _ := c.Cookie("session")
+	if token == "" {
+		if auth := c.GetHeader("Authorization"); strings.HasPrefix(auth, "Bearer ") {
+			token = strings.TrimPrefix(auth, "Bearer ")
+		}
+	}
 	if token != "" {
 		dbcore.DB().Where("token = ?", token).Delete(&models.Session{})
 	}

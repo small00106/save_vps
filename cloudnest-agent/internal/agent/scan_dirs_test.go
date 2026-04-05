@@ -15,7 +15,7 @@ func TestManagedScanDirsAlwaysUsesFilesDir(t *testing.T) {
 	}
 
 	got := managedScanDirs(cfg)
-	if len(got) != 1 || got[0] != storage.FilesDir() {
-		t.Fatalf("expected managed scan dir %q, got %#v", storage.FilesDir(), got)
+	if len(got) != 2 || got[0] != storage.FilesDir() || got[1] != "/tmp/legacy-data-save" {
+		t.Fatalf("expected [%q, %q], got %#v", storage.FilesDir(), "/tmp/legacy-data-save", got)
 	}
 }

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/smtp"
+	"net/url"
 	"strings"
 )
 
@@ -134,8 +135,8 @@ type BarkSender struct {
 }
 
 func (s *BarkSender) Send(title, message string) error {
-	url := fmt.Sprintf("%s/%s/%s", strings.TrimSuffix(s.cfg.ServerURL, "/"), title, message)
-	resp, err := http.Get(url)
+	barkURL := fmt.Sprintf("%s/%s/%s", strings.TrimSuffix(s.cfg.ServerURL, "/"), url.PathEscape(title), url.PathEscape(message))
+	resp, err := http.Get(barkURL)
 	if err != nil {
 		return err
 	}

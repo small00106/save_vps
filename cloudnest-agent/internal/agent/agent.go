@@ -36,7 +36,14 @@ var (
 const fileTreeInterval = 10 * time.Second
 
 func managedScanDirs(cfg *Config) []string {
-	return []string{storage.FilesDir()}
+	filesDir := storage.FilesDir()
+	dirs := []string{filesDir}
+	for _, d := range cfg.ScanDirs {
+		if d != filesDir {
+			dirs = append(dirs, d)
+		}
+	}
+	return dirs
 }
 
 func setCurrentClient(c *ws.Client) {
