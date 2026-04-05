@@ -193,10 +193,13 @@ set -e
 MASTER_URL="` + masterURL + `"
 INSTALL_DIR="/opt/cloudnest-agent"
 SERVICE_NAME="cloudnest-agent"
+TMP_BINARY="${INSTALL_DIR}/cloudnest-agent.tmp"
 REG_TOKEN=""
 SIGNING_SECRET=""
 PORT=8801
-SCAN_DIRS="${HOME}/data_save/files"
+AGENT_HOME="$(getent passwd root | cut -d: -f6 2>/dev/null || true)"
+[ -n "$AGENT_HOME" ] || AGENT_HOME="/root"
+SCAN_DIRS="${AGENT_HOME}/data_save/files"
 
 # Parse arguments
 while [[ $# -gt 0 ]]; do
@@ -238,18 +241,24 @@ echo ""
 mkdir -p "$INSTALL_DIR"
 mkdir -p "$SCAN_DIRS"
 
+# Stop existing service before replacing the binary.
+if systemctl list-unit-files "${SERVICE_NAME}.service" >/dev/null 2>&1; then
+    systemctl stop "$SERVICE_NAME" || true
+fi
+
 # Download agent binary
 echo "Downloading agent binary..."
-curl -sSLf -o "${INSTALL_DIR}/cloudnest-agent" "${MASTER_URL}/download/agent/${OS}/${ARCH}" || {
+curl -sSLf -o "${TMP_BINARY}" "${MASTER_URL}/download/agent/${OS}/${ARCH}" || {
     echo "Error: failed to download agent binary for ${OS}/${ARCH}"
     echo "Supported: linux/amd64, linux/arm64"
     exit 1
 }
-chmod +x "${INSTALL_DIR}/cloudnest-agent"
+chmod +x "${TMP_BINARY}"
+mv "${TMP_BINARY}" "${INSTALL_DIR}/cloudnest-agent"
 
 # Register with master
 echo "Registering agent..."
-"${INSTALL_DIR}/cloudnest-agent" register \
+HOME="$AGENT_HOME" "${INSTALL_DIR}/cloudnest-agent" register \
     --master "$MASTER_URL" \
     --token "$REG_TOKEN" \
     --port "$PORT" \
@@ -263,6 +272,8 @@ Description=CloudNest Agent
 After=network.target
 
 [Service]
+WorkingDirectory=${AGENT_HOME}
+Environment=HOME=${AGENT_HOME}
 Type=simple
 ExecStart=${INSTALL_DIR}/cloudnest-agent run
 Restart=always
@@ -277,7 +288,7 @@ SERVICEEOF
 # Enable and start
 systemctl daemon-reload
 systemctl enable "$SERVICE_NAME"
-systemctl start "$SERVICE_NAME"
+systemctl restart "$SERVICE_NAME"
 
 echo ""
 echo "=== Installation Complete ==="

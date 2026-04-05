@@ -3,21 +3,36 @@ package agent
 import (
 	"encoding/json"
 	"os"
+	"os/user"
 	"path/filepath"
 )
 
 type Config struct {
-	MasterURL  string   `json:"master_url"`
-	UUID       string   `json:"uuid"`
-	Token      string   `json:"token"`
-	Port       int      `json:"port"`
-	ScanDirs   []string `json:"scan_dirs"`
-	RateLimit  int64    `json:"rate_limit"`
+	MasterURL string   `json:"master_url"`
+	UUID      string   `json:"uuid"`
+	Token     string   `json:"token"`
+	Port      int      `json:"port"`
+	ScanDirs  []string `json:"scan_dirs"`
+	RateLimit int64    `json:"rate_limit"`
 }
 
 func configPath() string {
-	home, _ := os.UserHomeDir()
+	home := resolveHomeDir()
 	return filepath.Join(home, ".cloudnest", "agent.json")
+}
+
+func resolveHomeDir() string {
+	home, err := os.UserHomeDir()
+	if err == nil && home != "" {
+		return home
+	}
+
+	currentUser, err := user.Current()
+	if err == nil && currentUser.HomeDir != "" {
+		return currentUser.HomeDir
+	}
+
+	return "."
 }
 
 func LoadConfig() (*Config, error) {

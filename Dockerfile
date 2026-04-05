@@ -40,10 +40,11 @@ COPY --from=agent-builder /build/cloudnest-agent-linux-amd64 /app/data/binaries/
 COPY --from=agent-builder /build/cloudnest-agent-linux-arm64 /app/data/binaries/
 
 ENV GIN_MODE=release
-ENV CLOUDNEST_DB_TYPE=sqlite
-ENV CLOUDNEST_DB_DSN=/app/data/cloudnest.db
 ENV CLOUDNEST_LISTEN=0.0.0.0:8800
-ENV CLOUDNEST_REG_TOKEN=cloudnest-register
+ENV CLOUDNEST_DB_TYPE=mysql
+ENV CLOUDNEST_DB_DSN=cloudnest:change-me@tcp(save_vps_db:3306)/cloudnest?charset=utf8mb4&parseTime=True&loc=Local
+ENV CLOUDNEST_REG_TOKEN=change-me-reg-token
+ENV CLOUDNEST_SIGNING_SECRET=change-me-signing-secret
 
 EXPOSE 8800
 VOLUME /app/data

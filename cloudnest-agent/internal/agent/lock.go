@@ -26,7 +26,7 @@ type lockMetadata struct {
 }
 
 func defaultRunLockPath() string {
-	home, _ := os.UserHomeDir()
+	home := resolveHomeDir()
 	return filepath.Join(home, ".cloudnest", "agent.run.lock")
 }
 
@@ -149,4 +149,3 @@ func (l *runLock) Release() error {
 	}
 	return nil
 }
-

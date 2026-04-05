@@ -86,6 +86,23 @@ docker compose up -d --build
 
 > Docker 构建会自动编译前端、交叉编译 Agent 二进制（linux/amd64 + linux/arm64），并嵌入到 Master 镜像中。
 
+### 当前线上部署说明（本机实际运行）
+
+> 截止 2026-04-05，本机线上实例不是通过 `docker compose up` 启动，而是使用 `docker run` 创建容器。
+
+- Master 容器：`save_vps`（镜像 `save_vps:src-install-upgrade-fix`）
+- 数据库：独立容器 `save_vps_db`（MariaDB 11）
+- Master 端口映射：`127.0.0.1:8800 -> container:8800`
+- Master 网络：`save_vps_net`
+- Master 数据卷：`save_vps_data:/app/data`
+- 实际数据库配置：`CLOUDNEST_DB_TYPE=mysql`（不是 SQLite）
+
+**`docker-compose.yml` 与线上关系：**
+
+- 仓库根目录 `docker-compose.yml` 是最小化启动模板，默认走 SQLite，并使用示例密钥。
+- 本机线上部署已切换为 MySQL 和生产密钥，运行参数与该模板不完全一致。
+- 如果要用 compose 部署线上，请先把数据库、密钥、端口和卷配置改成与你目标环境一致，再执行 `docker compose up -d --build`。
+
 ### 方式二：二进制部署 Master
 
 ```bash
@@ -393,7 +410,7 @@ sig := hex.EncodeToString(mac.Sum(nil))
 2. **修改 admin 密码** — 首次登录后立即修改
 3. **HTTPS** — 使用 nginx / caddy 反代 Master 并配置 SSL 证书（数据面通过 Master 代理，无 mixed content 问题）
 4. **防火墙** — Master 开放 8800；Agent 8801 端口仅需对 Master IP 可达（不需要对公网开放）
-5. **备份** — 定期备份 `data/cloudnest.db`
+5. **备份** — SQLite 部署备份 `data/cloudnest.db`；MySQL 部署请定期备份 MySQL 数据库
 
 ### Nginx 反代示例
 
