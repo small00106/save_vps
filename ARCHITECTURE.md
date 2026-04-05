@@ -1,593 +1,683 @@
-# CloudNest: VPS 监控 + 分布式存储一体化系统
+# CloudNest 架构说明
 
-## 1. 项目概述
+> **范围声明**：本文描述的是 `save_vps` 仓库**当前代码已经实现**的架构，而非最早的目标设计稿。凡是未完全落地、仅有数据结构、或前后端尚未接线的能力，均会明确标注。
 
-CloudNest 是一个基于 Master-Agent 架构的 VPS 统一管理平台，兼具 **Komari Monitor 级别的服务器监控** 和 **分布式文件存储** 能力。仿照 [Komari Monitor](https://github.com/komari-monitor/komari) 的架构模式，将 4-6 台 VPS 组成统一管理平台。
+## 1. 系统定位
 
-**设计原则**：
-- 文件不分块，每个节点保存完整文件副本
-- Master 只管元数据和调度，不代理文件数据
-- 客户端通过签名 URL 直传 Agent 节点
-- Agent 定期上报指定目录的文件树，网页端浏览下载
-- 用户手动选择目标节点上传
+CloudNest 当前是一个基于 Master-Agent 的 VPS 管理系统，主要覆盖三类能力：
 
----
+- 节点监控：心跳、实时状态、历史指标、流量统计
+- 文件能力：节点真实目录浏览、单节点上传、托管文件元数据、托管文件搜索与下载
+- 运维能力：远程命令、Web 终端、Ping 任务、告警与通知、基础审计/设置
 
-## 2. 功能全景
+当前实现状态可以概括为：
 
-### A. 监控功能 (继承 Komari)
-
-| 功能 | 说明 |
-|------|------|
-| 实时指标 | CPU / RAM / Swap / Disk / 网络速率 / 负载 / 连接数 |
-| 历史图表 | 指标时序存储, 前端可查历史趋势 |
-| 流量统计 | 上传/下载累计流量, 可设流量限额 |
-| 在线状态 | 节点在线/离线实时追踪 |
-| 远程终端 | WebSocket Shell, 网页端直接操作 VPS |
-| 远程命令 | 批量执行 Shell 命令, 返回结果 |
-| Ping 探测 | ICMP/TCP/HTTP 探测任务, 多节点分布式执行 |
-| 审计日志 | 所有管理操作留痕 |
-
-### B. 存储功能 (新增)
-
-| 功能 | 说明 |
-|------|------|
-| 文件目录浏览 | Agent 定期上报指定目录的文件树, 网页端按节点浏览 |
-| 文件下载 | 网页端选中文件 → 签名 URL 直接从 Agent 下载 |
-| 文件上传 | 用户选择目标节点 → 签名 URL 直传 Agent |
-| 跨节点文件搜索 | 在 Master 缓存的所有节点文件树中搜索文件名 |
-| 文件副本管理 | 手动/自动将文件复制到其他节点 |
-
-### C. 增强功能 (新增)
-
-| 功能 | 说明 |
-|------|------|
-| 节点标签 | 给节点打自定义标签 (如 "日本"、"备份"), 前端按标签筛选 |
-| 存储告警 | 磁盘使用超阈值 → 触发通知 (Telegram/Webhook/Email/Bark) |
-| 传输限速 | Agent 可配置上传/下载带宽上限, 避免影响 VPS 其他服务 |
-| 多通知渠道 | Telegram / Webhook / Email / Bark / ServerChan |
+| 状态         | 能力                                                                                                                                   |
+| ------------ | -------------------------------------------------------------------------------------------------------------------------------------- |
+| 已实现       | Agent 注册、心跳、节点上下线、Dashboard 实时推送、节点详情图表、节点目录浏览/下载、单节点上传、托管文件搜索、远程命令、Web 终端、Ping 任务、告警规则/通知渠道、设置页、登录认证 |
+| 部分实现     | 文件副本元数据、`verify`/`replicate` 结果处理、文件管理 API（部分前端未使用）、节点标签编辑                                             |
+| 未完整落地   | 自动副本调度、多节点并行上传、前端标签筛选、完整审计留痕、独立的托管文件管理器 UI                                                       |
 
 ---
 
-## 3. 系统架构
+## 2. 总体架构
 
+当前代码的真实拓扑如下：
+
+```text
+Browser
+  │
+  │ REST + WebSocket
+  ▼
+Master (`cloudnest`)
+  ├─ `/api/*` 业务 API
+  ├─ `/api/ws/dashboard` 实时监控推送
+  ├─ `/api/ws/terminal/:uuid` 终端桥接
+  ├─ `/api/proxy/*` 文件上传/下载代理
+  ├─ `/install.sh` Agent 安装脚本
+  ├─ `/download/agent/:os/:arch` Agent 二进制分发
+  └─ 嵌入式前端静态资源（SPA）
+  │
+  ├─ WebSocket 控制面：`/api/agent/ws`
+  ▼
+Agent (`cloudnest-agent`)
+  ├─ 心跳与文件树上报
+  ├─ 执行命令 / Ping / 删除文件
+  ├─ 数据面 HTTP：`/api/files/:id`、`/api/browse`
+  └─ 数据面 WebSocket：`/api/terminal`
 ```
-                 ┌───────────────────────────────┐
-                 │      Master Server (8800)      │
-                 │  监控 / 存储调度 / 告警 / 面板   │
-                 │  SQLite (GORM)                 │
-                 └────┬──────┬──────┬─────────────┘
-                      │ WS   │ WS   │ WS  ← 控制面 (JSON-RPC 2.0)
-               ┌──────┘      │      └──────┐
-               ▼             ▼             ▼
-         ┌──────────┐  ┌──────────┐  ┌──────────┐
-         │ Agent A  │  │ Agent B  │  │ Agent C  │  ... (4-6台)
-         │ VPS-东京 │  │ VPS-美西 │  │ VPS-香港 │
-         │ :8801    │  │ :8801    │  │ :8801    │
-         └──────────┘  └──────────┘  └──────────┘
-               ▲             ▲             ▲
-               └──── HTTPS 签名URL直传 ────┘  ← 数据面 (上传/下载)
-                 ┌────────────────────────┐
-                 │       用户 / 浏览器      │
-                 └────────────────────────┘
-```
+
+这里有两个关键事实：
+
+- 当前浏览器并不会直接访问 Agent。上传、下载、目录下载都先打到 Master 的 `/api/proxy/*`，再由 Master 生成签名请求并转发到 Agent。
+- 终端也不是通过 Master-Agent 的 JSON-RPC 建立，而是 Master 先连接 Agent 的签名 WebSocket，再桥接到浏览器的 WebSocket。
 
 ---
 
-## 4. 技术栈
+## 3. 运行组件
 
-| 层 | 技术 |
-|---|---|
-| 后端 | Go 1.24+ / Gin / GORM / gorilla/websocket / Cobra |
-| 前端 | React + TypeScript + Tailwind + shadcn/ui |
-| 数据库 | SQLite (默认) / MySQL |
-| 缓存 | patrickmn/go-cache |
-| 部署 | 单二进制 / Docker / systemd |
+### 3.1 Master
 
----
+Master 二进制入口是 Cobra CLI：
 
-## 5. 通信协议
+- 启动命令：`cloudnest server`
+- 入口链路：`main.go` -> `cmd.Execute()` -> `server` 子命令
 
-### 5.1 Agent ↔ Master: WebSocket + JSON-RPC 2.0 (控制面)
+`server` 子命令启动时会完成以下动作：
 
-```
-连接: wss://master:8800/api/agent/ws
-认证: Authorization: Bearer <agent_token>
-```
+1. 解析 `listen/db-type/db-dsn` 参数与环境变量。
+2. 初始化数据库。
+3. 初始化内存缓存。
+4. 设置签名密钥。
+5. 启动后台调度器。
+6. 构建 Gin Router。
+7. 启动 HTTP 服务并处理优雅退出。
 
-**Agent → Master:**
+Master 的主要职责：
 
-| 方法 | 用途 | 频率 |
-|------|------|------|
-| `agent.heartbeat` | 系统指标 (CPU/RAM/Swap/Disk/网络/负载/连接数/进程数/Uptime) | 每 10s |
-| `agent.fileTree` | 指定目录的文件树 (路径/大小/修改时间) | 每 60s (首次全量, 后续增量) |
-| `agent.fileStored` | 文件写入完成确认 | 事件触发 |
-| `agent.fileDeleted` | 文件删除完成确认 | 事件触发 |
-| `agent.pingResult` | Ping 探测结果 | 事件触发 |
-| `agent.commandResult` | 远程命令执行结果 | 事件触发 |
+- 用户认证与会话管理
+- Agent 注册与 WS 连接管理
+- 节点、指标、文件元数据、Ping、告警等数据持久化
+- Dashboard 实时广播
+- 文件上传/下载代理
+- 终端桥接
+- 前端静态资源与安装脚本分发
 
-**Master → Agent:**
+### 3.2 Agent
 
-| 方法 | 用途 |
-|------|------|
-| `master.deleteFile` | 删除文件 |
-| `master.replicateFile` | 从另一节点拉取文件副本 |
-| `master.verifyFile` | 校验文件 SHA-256 |
-| `master.execCommand` | 执行远程命令 |
-| `master.startPing` | 启动 Ping 探测任务 |
-| `master.openTerminal` | 建立终端会话 |
+Agent 也是 Cobra CLI：
 
-### 5.2 用户 ↔ Master: REST API + WebSocket
+- `cloudnest-agent register`
+- `cloudnest-agent run`
 
-```
-# 认证
-POST   /api/auth/login
-POST   /api/auth/logout
+本地配置保存在：
 
-# 存储 - 文件管理
-POST   /api/files/upload                    # 初始化上传 (用户选节点), 返回签名URL
-GET    /api/files/download/:id              # 获取下载签名URL
-GET    /api/files?path=/folder              # 列出虚拟目录
-POST   /api/files/mkdir                     # 创建目录
-DELETE /api/files/:id                       # 删除文件
-PUT    /api/files/:id/move                  # 移动/重命名
+- `~/.cloudnest/agent.json`
 
-# 存储 - 节点文件浏览 (基于心跳上报的文件树)
-GET    /api/nodes/:uuid/files?path=/data    # 浏览某节点的真实文件目录
-GET    /api/nodes/:uuid/download?path=...   # 从某节点下载指定文件 (返回签名URL)
-GET    /api/files/search?q=keyword          # 跨节点文件搜索
+配置项只有：
 
-# 监控
-GET    /api/nodes                           # 节点列表 + 实时状态
-GET    /api/nodes/:uuid                     # 节点详情
-GET    /api/nodes/:uuid/metrics             # 历史指标
-GET    /api/nodes/:uuid/traffic             # 流量统计
-WS     /api/ws/dashboard                    # 实时推送监控数据到前端
+- `master_url`
+- `uuid`
+- `token`
+- `port`
+- `scan_dirs`
+- `rate_limit`
 
-# 远程操作
-POST   /api/nodes/:uuid/exec               # 执行远程命令
-WS     /api/ws/terminal/:uuid              # WebSocket 终端
+运行时职责：
 
-# Ping 探测
-GET    /api/ping/tasks                      # Ping 任务列表
-POST   /api/ping/tasks                      # 创建 Ping 任务
-GET    /api/ping/tasks/:id/results          # Ping 结果
+- 启动本地数据面 HTTP 服务
+- 连接 Master 的 `/api/agent/ws`
+- 每 10 秒发送一次心跳
+- 首次全量、随后每 10 秒增量上报文件树
+- 接收并执行 Master 下发的命令、Ping、删除文件指令
+- 提供签名保护的数据面下载、上传、目录打包下载、终端入口
 
-# 告警与通知
-GET    /api/alerts/rules                    # 告警规则列表
-POST   /api/alerts/rules                    # 创建告警规则
-PUT    /api/alerts/rules/:id               # 更新告警规则
-GET    /api/alerts/channels                 # 通知渠道配置
-PUT    /api/alerts/channels                 # 更新通知渠道
+Agent 具备单实例锁，默认锁文件在：
 
-# 管理
-GET    /api/admin/settings                  # 系统设置
-PUT    /api/admin/settings                  # 更新设置
-GET    /api/admin/audit                     # 审计日志
-PUT    /api/nodes/:uuid/tags               # 设置节点标签
-```
+- `~/.cloudnest/agent.run.lock`
 
-### 5.3 用户 ↔ Agent: 签名 URL 直传 (数据面)
+### 3.3 前端
 
-```
-PUT  https://agent:8801/api/files/:file_id?expires=<ts>&sig=<hmac>   # 上传
-GET  https://agent:8801/api/files/:file_id?expires=<ts>&sig=<hmac>   # 下载
-GET  https://agent:8801/api/browse?path=...&expires=<ts>&sig=<hmac>  # 按路径下载
-```
+前端是一个嵌入到 Master 中的 React SPA，路由如下：
 
-签名算法: HMAC-SHA256, 5 分钟有效期。
+| 路由               | 页面         |
+| ------------------ | ------------ |
+| `/login`           | 登录页       |
+| `/`                | Dashboard    |
+| `/nodes/:uuid`     | 节点详情     |
+| `/files`           | 文件搜索页   |
+| `/terminal/:uuid`  | 终端页       |
+| `/ping`            | Ping 任务    |
+| `/alerts`          | 告警与通知渠道 |
+| `/audit`           | 审计日志     |
+| `/settings`        | 设置页       |
 
-```go
-payload := fmt.Sprintf("%s:%d", fileID, expires)
-mac := hmac.New(sha256.New, []byte(sharedSecret))
-mac.Write([]byte(payload))
-sig := hex.EncodeToString(mac.Sum(nil))
-```
+认证方式不是前端持久化 token，而是：
+
+- `fetch(..., { credentials: "include" })`
+- 依赖 Master 下发的 `session` Cookie
+- `GET /api/auth/me` 用于恢复登录态
 
 ---
 
-## 6. 数据模型
+## 4. 启动与部署
 
-```go
-// ==================== 节点相关 ====================
+### 4.1 Master 配置
 
-// Node — 存储/监控节点
-type Node struct {
-    UUID      string   `gorm:"primaryKey;size:36"`
-    Token     string   `gorm:"size:64;uniqueIndex"`
-    Hostname  string
-    IP        string
-    Port      int      `gorm:"default:8801"`
-    Region    string
-    Tags      string   // JSON array: ["日本","备份","媒体"]
-    OS        string   // 操作系统
-    Arch      string   // CPU 架构
-    CPUModel  string   // CPU 型号
-    CPUCores  int
-    DiskTotal int64
-    DiskUsed  int64
-    RAMTotal  int64
-    Status    string   `gorm:"default:online"` // online/offline/draining
-    Version   string   // Agent 版本
-    RateLimit int64    // 传输限速 bytes/s, 0=不限
-    LastSeen  time.Time
-    CreatedAt time.Time
-    UpdatedAt time.Time
-}
+Master 当前使用以下环境变量：
 
-// NodeMetric — 节点实时指标 (热数据, 保留 4h)
-type NodeMetric struct {
-    ID           uint    `gorm:"primaryKey"`
-    NodeUUID     string  `gorm:"index"`
-    CPUPercent   float64
-    MemPercent   float64
-    SwapUsed     int64
-    SwapTotal    int64
-    DiskPercent  float64
-    Load1        float64
-    Load5        float64
-    Load15       float64
-    NetInSpeed   int64   // bytes/s
-    NetOutSpeed  int64   // bytes/s
-    NetInTotal   int64   // 累计字节
-    NetOutTotal  int64   // 累计字节
-    TCPConns     int
-    UDPConns     int
-    ProcessCount int
-    Uptime       int64   // 秒
-    Timestamp    time.Time `gorm:"index"`
-}
+| 变量                       | 说明             | 默认值                      |
+| -------------------------- | ---------------- | --------------------------- |
+| `CLOUDNEST_LISTEN`         | 监听地址         | `0.0.0.0:8800`              |
+| `CLOUDNEST_DB_TYPE`        | 数据库类型       | `sqlite`                    |
+| `CLOUDNEST_DB_DSN`         | 数据库连接串     | `./data/cloudnest.db`       |
+| `CLOUDNEST_REG_TOKEN`      | Agent 注册令牌   | `cloudnest-register`        |
+| `CLOUDNEST_SIGNING_SECRET` | 数据面签名密钥   | `cloudnest-default-secret`  |
 
-// NodeMetricCompact — 压缩后的长期指标 (15min 粒度)
-type NodeMetricCompact struct {
-    ID           uint    `gorm:"primaryKey"`
-    NodeUUID     string  `gorm:"index"`
-    CPUPercent   float64
-    MemPercent   float64
-    DiskPercent  float64
-    NetInSpeed   int64
-    NetOutSpeed  int64
-    BucketTime   time.Time `gorm:"index"` // 15min 对齐
-}
+数据库只支持：
 
-// ==================== 存储相关 ====================
+- `sqlite`
+- `mysql`
 
-// File — 文件元数据 (通过上传接口管理的文件)
-type File struct {
-    FileID    string `gorm:"primaryKey;size:36"`
-    Name      string
-    Path      string `gorm:"index"` // 虚拟路径
-    Size      int64
-    MimeType  string
-    Checksum  string
-    IsDir     bool   `gorm:"default:false"`
-    Status    string `gorm:"default:uploading"` // uploading/ready/deleting
-    CreatedAt time.Time
-    DeletedAt gorm.DeletedAt `gorm:"index"`
-}
+SQLite 模式下会自动创建目录并启用 WAL。
 
-// FileReplica — 文件副本位置
-type FileReplica struct {
-    ID         uint   `gorm:"primaryKey"`
-    FileID     string `gorm:"index"`
-    NodeUUID   string `gorm:"index"`
-    Status     string // pending/stored/verified/lost
-    StorePath  string
-    VerifiedAt time.Time
-}
+### 4.2 镜像构建
 
-// ==================== 认证 ====================
+顶层 `Dockerfile` 是多阶段构建：
 
-// User — 管理员 (单用户)
-type User struct {
-    ID           uint   `gorm:"primaryKey"`
-    Username     string `gorm:"uniqueIndex"`
-    PasswordHash string
-    CreatedAt    time.Time
-}
+1. 构建前端产物。
+2. 交叉编译 Agent（`linux/amd64`、`linux/arm64`）。
+3. 编译 Master，并把前端产物嵌入 `public/dist`。
+4. 在最终镜像内放入：Master 二进制 + Agent 下载二进制。
 
-// Session — 登录会话
-type Session struct {
-    Token     string `gorm:"primaryKey;size:64"`
-    UserID    uint
-    ExpiresAt time.Time
-}
+因此运行中的 Master 同时承担：
 
-// ==================== 告警 ====================
-
-// AlertRule — 告警规则
-type AlertRule struct {
-    ID          uint   `gorm:"primaryKey"`
-    Name        string
-    NodeUUID    string `gorm:"index"` // 空=全部节点
-    Metric      string // cpu/mem/disk/offline
-    Operator    string // gt/lt
-    Threshold   float64
-    Duration    int    // 持续秒数
-    ChannelID   uint   // 通知渠道
-    Enabled     bool   `gorm:"default:true"`
-    LastFiredAt time.Time
-    CreatedAt   time.Time
-}
-
-// AlertChannel — 通知渠道
-type AlertChannel struct {
-    ID     uint   `gorm:"primaryKey"`
-    Name   string
-    Type   string // telegram/webhook/email/bark/serverchan
-    Config string // JSON 配置 (token, url, etc.)
-}
-
-// ==================== Ping 探测 ====================
-
-// PingTask — Ping 探测任务
-type PingTask struct {
-    ID       uint   `gorm:"primaryKey"`
-    Name     string
-    Type     string // icmp/tcp/http
-    Target   string // IP/域名/URL
-    Interval int    // 秒
-    Enabled  bool   `gorm:"default:true"`
-}
-
-// PingResult — Ping 结果
-type PingResult struct {
-    ID         uint    `gorm:"primaryKey"`
-    TaskID     uint    `gorm:"index"`
-    NodeUUID   string  `gorm:"index"`
-    Latency    float64 // ms
-    Success    bool
-    Timestamp  time.Time `gorm:"index"`
-}
-
-// ==================== 远程操作 ====================
-
-// CommandTask — 远程命令执行记录
-type CommandTask struct {
-    ID        uint   `gorm:"primaryKey"`
-    NodeUUID  string `gorm:"index"`
-    Command   string
-    Output    string
-    ExitCode  int
-    Status    string // pending/running/done/failed
-    CreatedAt time.Time
-}
-
-// AuditLog — 审计日志
-type AuditLog struct {
-    ID        uint   `gorm:"primaryKey"`
-    Action    string
-    Detail    string
-    IP        string
-    CreatedAt time.Time
-}
-```
+- Web 控制台服务
+- Agent 安装脚本分发
+- Agent 二进制下载源
 
 ---
 
-## 7. 核心数据流
+## 5. 通信模型
 
-### 7.1 监控数据流
+### 5.1 浏览器 ↔ Master
 
-```
-Agent 每10s → WS agent.heartbeat → Master:
-  CPU/RAM/Swap/Disk/网络/负载/连接数/进程数/Uptime
-  → go-cache 缓存 → 每60s 刷入 NodeMetric 表
-  → 每30min 压缩为 NodeMetricCompact (15min粒度)
-  → WS 推送到前端 dashboard
+#### REST API
+
+当前主要接口如下：
+
+| 模块           | 接口                                                                                                                                                  |
+| -------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Auth           | `POST /api/auth/login` `POST /api/auth/logout` `GET /api/auth/me` `POST /api/auth/change-password`                                                   |
+| Agent          | `POST /api/agent/register` `GET /api/agent/ws`                                                                                                        |
+| Nodes          | `GET /api/nodes` `GET /api/nodes/:uuid` `GET /api/nodes/:uuid/metrics` `GET /api/nodes/:uuid/traffic` `PUT /api/nodes/:uuid/tags`                    |
+| Node Files     | `GET /api/nodes/:uuid/files` `GET /api/nodes/:uuid/download`                                                                                          |
+| Managed Files  | `POST /api/files/upload` `GET /api/files/download/:id` `GET /api/files` `POST /api/files/mkdir` `DELETE /api/files/:id` `PUT /api/files/:id/move` `GET /api/files/search` |
+| Proxy          | `PUT /api/proxy/upload/:file_id` `GET /api/proxy/download/:file_id` `GET /api/proxy/browse`                                                          |
+| Command        | `POST /api/nodes/:uuid/exec` `GET /api/commands/:id`                                                                                                  |
+| Ping           | `GET /api/ping/tasks` `POST /api/ping/tasks` `GET /api/ping/tasks/:id/results` `DELETE /api/ping/tasks/:id`                                           |
+| Alerts         | `GET/POST/PUT/DELETE /api/alerts/rules` `GET/POST /api/alerts/channels` `PUT /api/alerts/channels/:id`                                               |
+| Admin          | `GET /api/admin/settings` `PUT /api/admin/settings` `GET /api/admin/audit`                                                                            |
+
+#### WebSocket
+
+浏览器只使用两个 WebSocket 端点：
+
+| 端点                          | 用途                             |
+| ----------------------------- | -------------------------------- |
+| `GET /api/ws/dashboard`       | Dashboard 实时心跳/状态推送      |
+| `GET /api/ws/terminal/:uuid`  | 浏览器终端与 Agent shell 的桥接通道 |
+
+### 5.2 Agent ↔ Master 控制面
+
+控制面走 WebSocket：
+
+- 地址：`/api/agent/ws`
+- 认证：`Authorization: Bearer <agent_token>`
+- 协议格式：JSON-RPC 风格消息结构
+
+### Agent → Master
+
+| 方法                      | 说明                                           |
+| ------------------------- | ---------------------------------------------- |
+| `agent.heartbeat`         | 上报节点指标、磁盘信息、运行状态               |
+| `agent.fileTree`          | 上报文件树全量或增量                           |
+| `agent.fileStored`        | 上传完成回执                                   |
+| `agent.fileDeleted`       | 删除完成回执                                   |
+| `agent.pingResult`        | Ping 结果回传                                  |
+| `agent.commandResult`     | 远程命令执行结果                               |
+| `agent.verifyResult`      | 校验结果回传（当前仅有接收端）                 |
+| `agent.replicateResult`   | 副本复制结果回传（当前仅有接收端）             |
+
+### Master → Agent
+
+当前 Master 真实发出的控制消息只有四类：
+
+| 方法                  | 说明               |
+| --------------------- | ------------------ |
+| `master.execCommand`  | 执行远程命令       |
+| `master.startPing`    | 启动 Ping 任务     |
+| `master.stopPing`     | 停止 Ping 任务     |
+| `master.deleteFile`   | 删除托管文件副本   |
+
+注意：
+
+- 文档草稿里出现过的 `master.openTerminal` 在当前代码中并不存在。
+- `master.verifyFile`、`master.replicateFile` 在 Agent 有处理分支，但 Master 当前没有实际发送逻辑。
+
+### 5.3 Master ↔ Agent 数据面
+
+Agent 当前暴露的数据面路由如下：
+
+| 路由                      | 用途                               |
+| ------------------------- | ---------------------------------- |
+| `PUT /api/files/:file_id` | 上传文件                           |
+| `GET /api/files/:file_id` | 下载按 `file_id` 存储的文件        |
+| `GET /api/browse`         | 按真实受管路径下载文件或打包目录   |
+| `GET /api/terminal`       | 终端 WebSocket                     |
+| `GET /api/health`         | 本地就绪探针                       |
+
+这些路由全部通过签名校验保护，`/api/health` 除外。
+
+签名算法实际是：
+
+```text
+payload = UPPER(method) + ":" + resourceID + ":" + expires
+sig = HMAC_SHA256(signing_secret, payload)
 ```
 
-### 7.2 文件目录数据流
+不同场景下的 `resourceID`：
 
-```
-Agent 每60s → WS agent.fileTree → Master:
-  扫描配置的根目录 (如 /data)
-  → 首次全量: [{path, size, modTime, isDir}, ...]
-  → 后续增量: {added: [...], removed: [...], modified: [...]}
-  → Master 缓存在内存 (nodeFileTrees map[uuid][]FileEntry)
-  → 前端 GET /api/nodes/:uuid/files?path= 查询
-```
+| 场景           | resourceID                          |
+| -------------- | ----------------------------------- |
+| 普通下载       | `file_id`                           |
+| 浏览路径下载   | `path`                              |
+| 终端 WS        | `id`                                |
+| 上传           | `file_id\|path\|name\|overwrite`    |
 
-### 7.3 上传数据流
-
-```
-用户 → Master: POST /api/files/upload { name, size, node_uuids: ["A","B"] }
-  (用户自选目标节点)
-Master → 用户: { file_id, targets: [{ node, url (签名) }] }
-用户 → Agent A: PUT 完整文件 (直传)
-用户 → Agent B: PUT 完整文件 (直传, 并行)
-Agent → Master (WS): fileStored 确认
-```
-
-### 7.4 下载数据流 (两种模式)
-
-**模式1: 从节点文件浏览器下载 (浏览 Agent 真实目录)**
-```
-用户浏览 /api/nodes/A/files?path=/data/videos
-  → 看到文件列表 (来自 Agent 上报的文件树缓存)
-  → 点击下载
-  → GET /api/nodes/A/download?path=/data/videos/movie.mp4
-  → Master 返回签名 URL
-  → 浏览器直接从 Agent A 下载
-```
-
-**模式2: 从虚拟文件管理器下载 (Master 管理的文件)**
-```
-用户浏览 /api/files?path=/photos
-  → 看到通过上传接口管理的文件
-  → 点击下载
-  → GET /api/files/download/:file_id
-  → Master 选一个在线节点, 返回签名 URL
-  → 浏览器直接从 Agent 下载
-```
-
-### 7.5 告警数据流
-
-```
-Agent 心跳 → Master 检查告警规则:
-  if node.disk_percent > rule.threshold 持续 rule.duration:
-    → 查找对应 AlertChannel
-    → 发送通知 (Telegram/Webhook/Email/Bark)
-    → 记录 AuditLog
-```
+这意味着当前实现不是简单的 `fileID:expires` 签名模型。
 
 ---
 
-## 8. 项目目录结构
+## 6. 核心数据流
 
-### Master (`cloudnest/`)
+### 6.1 Agent 注册
+
+```text
+Agent register
+  -> POST /api/agent/register (Bearer reg token)
+  -> Master 生成 node uuid + agent token
+  -> Agent 保存到 ~/.cloudnest/agent.json
 ```
-cloudnest/
-├── main.go
-├── cmd/
-│   ├── root.go
-│   └── server.go
-├── internal/
-│   ├── server/
-│   │   ├── server.go             # Gin 路由 + 中间件
-│   │   └── middleware/auth.go
-│   ├── api/
-│   │   ├── agent/                # Agent 注册, WS, 心跳
-│   │   │   ├── register.go
-│   │   │   ├── websocket.go
-│   │   │   └── heartbeat.go
-│   │   ├── files/                # 文件上传/下载/CRUD/搜索
-│   │   │   ├── upload.go
-│   │   │   ├── download.go
-│   │   │   ├── browse.go        # 节点文件浏览
-│   │   │   ├── search.go        # 跨节点搜索
-│   │   │   └── manage.go
-│   │   ├── nodes/                # 节点列表/详情/指标/标签
-│   │   ├── monitor/              # 实时监控 WS 推送
-│   │   ├── terminal/             # 远程终端 WS
-│   │   ├── command/              # 远程命令执行
-│   │   ├── ping/                 # Ping 探测任务
-│   │   ├── alerts/               # 告警规则 + 通知渠道
-│   │   ├── admin/                # 系统设置 + 审计日志
-│   │   └── auth/                 # 登录/会话
-│   ├── database/
-│   │   ├── dbcore/init.go        # GORM 初始化 (sync.Once)
-│   │   └── models/               # 所有数据模型
-│   ├── ws/
-│   │   ├── hub.go                # Agent WS 连接管理
-│   │   ├── dashboard.go          # 前端 WS 推送
-│   │   └── safeconn.go
-│   ├── placement/selector.go     # 节点选择算法
-│   ├── transfer/signer.go        # HMAC 签名 URL
-│   ├── notify/                   # 通知发送器
-│   │   ├── sender.go             # 统一接口
-│   │   ├── telegram.go
-│   │   ├── webhook.go
-│   │   ├── email.go
-│   │   └── bark.go
-│   ├── scheduler/
-│   │   ├── health.go             # 节点健康检查
-│   │   ├── alerts.go             # 告警规则评估
-│   │   ├── replication.go        # 补副本
-│   │   ├── integrity.go          # 文件校验
-│   │   ├── compaction.go         # 指标压缩
-│   │   └── gc.go                 # 垃圾回收
-│   └── cache/
-│       ├── cache.go              # go-cache 指标缓冲
-│       └── filetree.go           # 节点文件树缓存
-├── public/dist/                  # go:embed 前端
+
+### 6.2 心跳与实时监控
+
+```text
+Agent 每 10s 发送 agent.heartbeat
+  -> Master 更新 nodes.last_seen/status/disk_*
+  -> 指标写入内存缓冲
+  -> 最新指标缓存到 metric:<uuid>
+  -> 广播给 /api/ws/dashboard
+  -> 调度器每 60s 批量落库到 node_metrics
+```
+
+离线判定：
+
+- `healthChecker` 每 10 秒运行一次
+- 超过 30 秒无心跳且 WS 也已断开时，节点会被标记为 `offline`
+
+### 6.3 文件树与节点目录浏览
+
+```text
+Agent 启动时先发一次全量 fileTree
+Agent 之后每 10s 重新扫描 scan_dirs
+  -> 只发送 added / removed
+  -> Master 缓存 filetree:<uuid>
+  -> 前端通过 /api/nodes/:uuid/files?path=... 浏览某个节点当前目录
+```
+
+说明：
+
+- 当前没有独立的 `modified` 字段。
+- 文件变化会被折叠进 `added`。
+- Agent 运行时会强制把托管存储根目录加入 `scan_dirs`。
+
+### 6.4 托管文件上传
+
+当前实现是“单节点上传”，不是多节点并行上传：
+
+```text
+Browser
+  -> POST /api/files/upload
+  -> Master 创建 file + file_replica(status=pending)
+  -> 返回 /api/proxy/upload/:file_id?node=...
+  -> Browser PUT 到 Master proxy
+  -> Master 生成签名 Agent URL 并流式转发
+  -> Agent 写入文件
+  -> Agent 发送 agent.fileStored
+  -> Master 把 replica.status 更新为 stored
+  -> 若无 pending replica，则把 file.status 更新为 ready
+```
+
+当前限制：
+
+- `node_uuid` 才是真正使用的上传目标。
+- 即使请求体里给了 `node_uuids`，当前也只会使用第一个。
+- 前端没有“选多个目标节点上传”的界面。
+
+### 6.5 下载
+
+有两种下载入口，但两者最终都经过 Master proxy：
+
+#### 节点真实目录下载
+
+```text
+Browser -> GET /api/nodes/:uuid/download?path=...
+        -> Master 返回 /api/proxy/browse?... 
+        -> Browser 请求 proxy
+        -> Master 生成签名 Agent /api/browse 请求并转发
+```
+
+#### 托管文件下载
+
+```text
+Browser -> GET /api/files/download/:id
+        -> Master 选择一个 online + stored 的 replica
+        -> 返回 /api/proxy/browse?... 
+        -> Browser 请求 proxy
+        -> Master 转发给 Agent
+```
+
+说明：
+
+- 当前实现里 `GET /api/proxy/download/:file_id` 路由存在，但托管文件下载主路径实际更常走 `/api/proxy/browse`。
+- 浏览目录下载时，如果目标是目录，Agent 会实时打包为 zip 返回。
+
+### 6.6 搜索
+
+当前的“跨节点文件搜索”并不是搜索 file tree 缓存，而是：
+
+- 查询 `files` 表
+- 条件：`status = ready` 且 `is_dir = false`
+- 因此它搜索的是“通过托管上传接口进入数据库的文件”，不是所有节点真实目录中的所有文件
+
+### 6.7 删除
+
+```text
+Browser -> DELETE /api/files/:id
+        -> Master 把 file.status 标记为 deleting
+        -> 向每个 replica 所在 Agent 发送 master.deleteFile
+        -> Agent 删除本地文件并回发 agent.fileDeleted
+        -> Master 删除对应 file_replica
+        -> GC 周期任务在 replica 清空后软删除 file 记录
+```
+
+### 6.8 远程命令
+
+```text
+Browser -> POST /api/nodes/:uuid/exec
+        -> Master 创建 command_task(status=pending)
+        -> 发送 master.execCommand
+        -> Agent 用 shell 执行，默认 60s 超时
+        -> Agent 回发 agent.commandResult
+        -> Master 更新 output/exit_code/status
+        -> 前端轮询 GET /api/commands/:id
+```
+
+### 6.9 Web 终端
+
+```text
+Browser WS -> /api/ws/terminal/:uuid
+           -> Master 校验节点在线
+           -> Master 生成签名 Agent WS URL `/api/terminal`
+           -> Master 与 Agent 建立 WS
+           -> Master 在 Browser WS 与 Agent WS 之间双向转发
+           -> Agent 启动本地 shell 并把 stdin/stdout 绑定到 WS
+```
+
+### 6.10 Ping 任务
+
+```text
+Browser -> POST /api/ping/tasks
+        -> Master 落库 ping_task
+        -> 广播 master.startPing 给所有在线 Agent
+        -> Agent 按 interval 执行 icmp/tcp/http 探测
+        -> Agent 发送 agent.pingResult
+        -> Master 落库 ping_results
+```
+
+补充：
+
+- 删除任务时，Master 会广播 `master.stopPing`。
+- Agent 会把小于 5 秒的间隔强制提升为 60 秒。
+- ICMP 当前只有 Linux 真正实现，非 Linux 是 stub。
+
+### 6.11 告警
+
+```text
+调度器每 10s 扫描 enabled alert rules
+  -> 读取节点状态或指定时间窗口内的指标
+  -> 判断 sustained threshold / offline
+  -> 命中后调用 notify sender
+  -> 更新 last_fired_at
+  -> 写入一条 audit_log(alert_fired)
+```
+
+支持的通知渠道类型：
+
+- `telegram`
+- `webhook`
+- `email`
+- `bark`
+- `serverchan`
+
+---
+
+## 7. 数据存储
+
+启动时自动迁移以下表：
+
+| 分组           | 表                                                  |
+| -------------- | --------------------------------------------------- |
+| 节点与指标     | `nodes` `node_metrics` `node_metric_compacts`       |
+| 文件           | `files` `file_replicas`                             |
+| 认证           | `users` `sessions`                                  |
+| 告警           | `alert_rules` `alert_channels`                      |
+| Ping           | `ping_tasks` `ping_results`                         |
+| 运维           | `command_tasks` `audit_logs`                        |
+| 系统设置       | `settings`                                          |
+
+几个容易混淆的点：
+
+- `Setting` 表是真实存在的，不应遗漏。
+- `FileReplica` 表已经存在，但当前没有完整的自动副本编排流程。
+- `Node.Status` 字段当前主要看到 `online/offline`，文档里常出现的 `draining` 并没有业务流使用。
+- `Node.RateLimit` 会在注册配置里保存，但 Master 侧没有动态调度逻辑去使用它。
+
+### 7.1 内存缓存
+
+Master 使用内存缓存保存两类热数据：
+
+- `metric:<uuid>`：最新实时指标
+- `filetree:<uuid>`：节点文件树
+
+此外还有一个内存缓冲区用于聚合心跳指标，供调度器批量落库。
+
+---
+
+## 8. 后台任务
+
+当前真实存在的后台任务只有 5 个：
+
+| 任务                  | 周期   | 作用                                           |
+| --------------------- | ------ | ---------------------------------------------- |
+| `metricFlusher`       | 60s    | 把内存中的 `NodeMetric` 批量写入数据库         |
+| `healthChecker`       | 10s    | 检测 30 秒未更新的节点并标记离线               |
+| `startCompaction`     | 30min  | 把 4 小时前的原始指标压缩到 15 分钟粒度        |
+| `startAlertEvaluator` | 10s    | 评估告警规则并发送通知                         |
+| `startGC`             | 2min   | 重试 deleting 文件删除、清理离线节点缓存       |
+
+说明：
+
+- 当前不存在 `replication.go`、`integrity.go`、`health.go` 这类独立调度文件。
+- 指标查询中，`1h/4h` 使用原始指标；`24h/7d` 使用“压缩指标 + 最近 4 小时原始指标”的合并结果。
+
+---
+
+## 9. 前端结构
+
+### 9.1 技术栈
+
+当前前端技术栈是：
+
+- React 19
+- TypeScript
+- Vite
+- Tailwind CSS v4
+- `lucide-react`
+- `recharts`
+- `@xterm/xterm`
+
+注意：
+
+- 当前代码里没有 `shadcn/ui` 的依赖和目录结构。
+- 组件以项目内自定义组件为主。
+
+### 9.2 页面职责
+
+| 页面          | 当前职责                                                           |
+| ------------- | ------------------------------------------------------------------ |
+| Dashboard     | 节点概览、在线状态、基础容量、实时心跳融合                         |
+| NodeDetail    | 节点信息、历史指标图表、节点目录浏览/下载、单节点上传、标签编辑、快速命令 |
+| FileBrowser   | 托管文件搜索与下载，仅搜索模式                                     |
+| Terminal      | 基于 xterm.js 的远程终端                                           |
+| PingTasks     | 任务列表、新建、删除、查看结果                                     |
+| Alerts        | 规则增删改、启停、渠道创建与编辑                                   |
+| AuditLog      | 表格展示审计日志                                                   |
+| Settings      | 修改密码、主题/语言偏好                                            |
+| Login         | 登录                                                               |
+
+### 9.3 当前前端边界
+
+以下能力在文档草稿里常被写成“已完成”，但当前前端并未真正实现：
+
+- 标签筛选
+- 多节点上传选择器
+- 托管文件目录式管理器
+- 文件副本管理界面
+- 独立 `FileSearch` 页面
+- 告警渠道删除按钮
+
+---
+
+## 10. 认证与安全边界
+
+### 10.1 用户认证
+
+- 登录成功后会创建 30 天有效的 `sessions` 记录。
+- Master 会写入 `session` Cookie。
+- 认证中间件同时支持：Cookie + Bearer Token。
+- 启动时如果数据库中没有用户，会自动创建默认管理员：`admin / admin`。
+
+### 10.2 Agent 认证
+
+- 注册使用 `CLOUDNEST_REG_TOKEN`。
+- 注册成功后每个节点都会拿到独立 `agent token`。
+- Agent WS 连接依赖这个 token。
+
+### 10.3 数据面签名
+
+- 文件上传、下载、路径浏览、终端都使用 HMAC-SHA256 签名。
+- Agent 只校验签名是否正确、是否过期。
+- 当前“5 分钟有效期”是 Master 生成签名 URL 时的策略，而不是 Agent 端写死的常量。
+
+### 10.4 路径约束
+
+Agent 对以下路径操作做了受管目录校验：
+
+- `GET /api/browse`
+- 带 `name/path` 的上传
+- 按 `store_path` 删除文件
+
+这保证浏览/删除不会越过受管根目录。
+
+---
+
+## 11. 仓库结构
+
+以下是与当前实现一致的目录概览：
+
+```text
+save_vps/
+├── cloudnest/
+│   ├── cmd/
+│   │   ├── root.go
+│   │   └── server.go
+│   ├── internal/
+│   │   ├── api/
+│   │   │   ├── admin/
+│   │   │   ├── agent/
+│   │   │   ├── alerts/
+│   │   │   ├── auth/
+│   │   │   ├── command/
+│   │   │   ├── files/
+│   │   │   ├── nodes/
+│   │   │   ├── ping/
+│   │   │   └── terminal/
+│   │   ├── cache/
+│   │   │   └── cache.go
+│   │   ├── database/
+│   │   │   ├── dbcore/
+│   │   │   └── models/
+│   │   ├── notify/
+│   │   │   └── sender.go
+│   │   ├── scheduler/
+│   │   │   ├── alerts.go
+│   │   │   ├── compaction.go
+│   │   │   ├── gc.go
+│   │   │   └── scheduler.go
+│   │   ├── server/
+│   │   │   ├── middleware/
+│   │   │   └── server.go
+│   │   ├── transfer/
+│   │   │   └── signer.go
+│   │   └── ws/
+│   │       ├── dashboard.go
+│   │       ├── errors.go
+│   │       ├── hub.go
+│   │       └── safeconn.go
+│   ├── public/
+│   │   ├── dist/
+│   │   └── embed.go
+│   └── main.go
+├── cloudnest-agent/
+│   ├── cmd/
+│   │   ├── register.go
+│   │   ├── root.go
+│   │   └── run.go
+│   ├── internal/
+│   │   ├── agent/
+│   │   ├── reporter/
+│   │   ├── server/
+│   │   ├── storage/
+│   │   │   └── path.go
+│   │   ├── terminal/
+│   │   └── ws/
+│   └── main.go
+├── cloudnest-web/
+│   ├── src/
+│   │   ├── api/
+│   │   ├── components/
+│   │   ├── contexts/
+│   │   ├── hooks/
+│   │   ├── i18n/
+│   │   ├── pages/
+│   │   └── utils/
+│   └── package.json
 ├── Dockerfile
 ├── docker-compose.yml
-└── go.mod
-```
-
-### Agent (`cloudnest-agent/`)
-```
-cloudnest-agent/
-├── main.go
-├── cmd/
-│   ├── root.go
-│   ├── run.go
-│   └── register.go
-├── internal/
-│   ├── agent/
-│   │   ├── agent.go              # 主循环 + 优雅关闭
-│   │   └── config.go             # 本地配置 (含 rate_limit, scan_dirs)
-│   ├── ws/
-│   │   ├── client.go             # WS 客户端 + 指数退避重连
-│   │   └── handler.go            # 处理 Master 下发的指令
-│   ├── storage/
-│   │   ├── engine.go             # 文件读写删
-│   │   ├── scanner.go            # 目录扫描 + 增量 diff
-│   │   └── integrity.go          # SHA-256 校验
-│   ├── server/
-│   │   ├── server.go             # Gin HTTP 数据面
-│   │   ├── upload.go             # PUT /api/files/:id
-│   │   ├── download.go           # GET /api/files/:id + browse
-│   │   ├── auth.go               # 签名 URL 验证
-│   │   └── ratelimit.go          # 传输限速中间件
-│   ├── terminal/
-│   │   └── shell.go              # 终端 WS 处理
-│   └── reporter/
-│       ├── metrics.go            # 系统指标采集 (CPU/RAM/Disk/Net/Load)
-│       └── filetree.go           # 文件树上报
-├── Dockerfile
-├── install.sh
-└── go.mod
-```
-
-### 前端 (`cloudnest-web/`)
-```
-cloudnest-web/
-├── src/
-│   ├── pages/
-│   │   ├── Dashboard.tsx         # 总览: 所有节点状态卡片
-│   │   ├── NodeDetail.tsx        # 单节点: 指标图表 + 文件浏览
-│   │   ├── FileBrowser.tsx       # 虚拟文件管理器
-│   │   ├── FileSearch.tsx        # 跨节点搜索
-│   │   ├── Terminal.tsx          # 远程终端
-│   │   ├── PingTasks.tsx         # Ping 探测
-│   │   ├── Alerts.tsx            # 告警规则 + 通知渠道
-│   │   ├── AuditLog.tsx          # 审计日志
-│   │   ├── Login.tsx
-│   │   └── Settings.tsx
-│   ├── components/
-│   │   ├── NodeCard.tsx          # 节点状态卡片 (CPU/RAM/Disk/标签)
-│   │   ├── MetricsChart.tsx      # 指标折线图
-│   │   ├── FileList.tsx          # 文件/目录列表
-│   │   ├── UploadDialog.tsx      # 上传对话框 (选节点)
-│   │   ├── SearchBar.tsx         # 文件搜索栏
-│   │   ├── TagFilter.tsx         # 标签筛选
-│   │   ├── Breadcrumb.tsx
-│   │   └── XTerm.tsx             # 终端组件 (xterm.js)
-│   ├── hooks/
-│   │   ├── useWebSocket.ts       # 实时监控数据
-│   │   ├── useUpload.ts
-│   │   └── useAuth.ts
-│   └── api/client.ts
-└── package.json
+└── ARCHITECTURE.md
 ```
 
 ---
 
-## 9. 实施顺序
+## 12. 当前已知边界与后续可演进点
 
-| 阶段 | 内容 | 交付 |
-|------|------|------|
-| 1. 基础框架 | 脚手架, Cobra CLI, 全部数据模型, Agent 注册, WS Hub | Master+Agent 能连接 |
-| 2. 监控核心 | 心跳上报全部指标, 指标存储+压缩, 前端 Dashboard + 节点详情 + 图表 | 监控可用 |
-| 3. 存储核心 | 文件目录扫描+上报, 节点文件浏览, 上传/下载, 跨节点搜索 | 存储可用 |
-| 4. 远程操作 | 远程终端, 远程命令, Ping 探测 | 运维功能完整 |
-| 5. 告警通知 | 告警规则, 通知渠道 (Telegram/Webhook/Email/Bark), 存储告警 | 告警可用 |
-| 6. 增强 | 节点标签, 传输限速, 副本管理, 审计日志 | 功能完善 |
-| 7. 部署 | Docker, systemd, install.sh | 一键部署 |
+为了避免把“设计目标”误写成“当前事实”，这里把最重要的边界单独列出：
+
+1. 文件上传当前是单节点上传，`node_uuids` 没有真正形成多副本并行上传流程。
+2. `FileReplica`、`verifyResult`、`replicateResult` 说明副本体系有数据模型和 Agent 侧预留，但 Master 侧还没有完整编排。
+3. `/files` 前端当前只是搜索页，不是完整文件管理器。
+4. 标签当前只能显示和编辑，不能筛选。
+5. 审计日志不是“所有管理操作全留痕”，目前明确写入的场景主要是 `settings_updated` 和 `alert_fired`。
+6. 文档中若要继续写“目标架构”或“Roadmap”，应单独开章节，避免与“当前实现架构”混在一起。
 
 ---
 
-## 10. 验证方案
+## 13. 建议的文档维护原则
 
-1. `docker-compose up` 启动 Master + 2 Agent
-2. Agent 自动注册 → Dashboard 显示两节点在线, 实时指标刷新
-3. 节点详情页查看 CPU/RAM/Disk 历史图表
-4. 浏览 Agent A 的 /data 目录 → 看到文件列表 → 点击下载
-5. 上传文件到 Agent A → 验证 Agent A 本地有文件
-6. 搜索文件名 → 跨节点返回结果
-7. 打开远程终端 → 执行命令
-8. 配置告警: 磁盘 > 80% → 收到 Webhook 通知
-9. 停止一个 Agent → 30s 后标记 offline → 触发离线告警
-10. 给节点打标签 → 前端按标签筛选
+后续维护 `ARCHITECTURE.md` 时，建议遵守三条规则：
+
+1. 先写“当前实现”，再写“计划能力”。
+2. 所有接口、调度器、目录结构都以仓库现有文件为准，不写想象中的模块名。
+3. 凡是只有模型或处理分支、没有完整业务入口的能力，都标成“部分实现”或“预留”。
