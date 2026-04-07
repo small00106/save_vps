@@ -2,6 +2,7 @@ package ws
 
 import (
 	"encoding/json"
+	"errors"
 	"log"
 	"net/http"
 	"strings"
@@ -19,12 +20,22 @@ type RPCMessage struct {
 	ID      string          `json:"id,omitempty"`
 }
 
+const (
+	clientWSWriteWait      = 10 * time.Second
+	clientWSPongWait       = 70 * time.Second
+	clientWSPingPeriod     = (clientWSPongWait * 9) / 10
+	clientWSMaxMessageSize = 32 << 20
+)
+
+var ErrNotConnected = errors.New("websocket not connected")
+
 type Client struct {
 	mu        sync.Mutex
 	conn      *websocket.Conn
 	masterURL string
 	token     string
 	OnMessage func(msg *RPCMessage)
+	pingStop  chan struct{}
 }
 
 func NewClient(masterURL, token string) *Client {
@@ -45,13 +56,18 @@ func (c *Client) Connect() error {
 
 	backoff := time.Second
 	maxBackoff := 60 * time.Second
+	dialer := *websocket.DefaultDialer
+	dialer.HandshakeTimeout = 15 * time.Second
 
 	for {
-		conn, _, err := websocket.DefaultDialer.Dial(wsURL, header)
+		conn, _, err := dialer.Dial(wsURL, header)
 		if err == nil {
+			configureConn(conn)
 			c.mu.Lock()
 			c.conn = conn
+			c.pingStop = make(chan struct{})
 			c.mu.Unlock()
+			go c.pingLoop()
 			log.Printf("[WS] Connected to master")
 			backoff = time.Second
 			return nil
@@ -69,14 +85,23 @@ func (c *Client) Connect() error {
 // SendJSON sends a JSON-RPC message.
 func (c *Client) SendJSON(msg *RPCMessage) error {
 	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	if c.conn == nil {
-		return nil
+	conn := c.conn
+	if conn == nil {
+		c.mu.Unlock()
+		return ErrNotConnected
 	}
 
 	// gorilla/websocket requires a single writer per connection.
-	return c.conn.WriteJSON(msg)
+	if err := conn.SetWriteDeadline(time.Now().Add(clientWSWriteWait)); err != nil {
+		c.mu.Unlock()
+		return err
+	}
+	err := conn.WriteJSON(msg)
+	c.mu.Unlock()
+	if err != nil {
+		c.Close()
+	}
+	return err
 }
 
 // Send is a convenience method for sending method+params.
@@ -99,7 +124,7 @@ func (c *Client) ReadLoop() error {
 	conn := c.conn
 	c.mu.Unlock()
 	if conn == nil {
-		return nil
+		return ErrNotConnected
 	}
 
 	for {
@@ -124,8 +149,52 @@ func (c *Client) Close() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
+	if c.pingStop != nil {
+		close(c.pingStop)
+		c.pingStop = nil
+	}
 	if c.conn != nil {
 		c.conn.Close()
 		c.conn = nil
 	}
+}
+
+func configureConn(conn *websocket.Conn) {
+	conn.SetReadLimit(clientWSMaxMessageSize)
+	_ = conn.SetReadDeadline(time.Now().Add(clientWSPongWait))
+	conn.SetPongHandler(func(string) error {
+		return conn.SetReadDeadline(time.Now().Add(clientWSPongWait))
+	})
+}
+
+func (c *Client) pingLoop() {
+	c.mu.Lock()
+	stop := c.pingStop
+	c.mu.Unlock()
+
+	ticker := time.NewTicker(clientWSPingPeriod)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			if err := c.writeControl(websocket.PingMessage, []byte("ping")); err != nil {
+				log.Printf("[WS] Ping failed: %v", err)
+				c.Close()
+				return
+			}
+		case <-stop:
+			return
+		}
+	}
+}
+
+func (c *Client) writeControl(messageType int, data []byte) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if c.conn == nil {
+		return ErrNotConnected
+	}
+	return c.conn.WriteControl(messageType, data, time.Now().Add(clientWSWriteWait))
 }

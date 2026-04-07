@@ -30,6 +30,9 @@ func ScanDirectories(dirs []string) []FileEntry {
 			if err != nil {
 				return nil
 			}
+			if info.Mode()&os.ModeSymlink != 0 {
+				return nil
+			}
 			if filepath.Clean(path) == root {
 				return nil
 			}

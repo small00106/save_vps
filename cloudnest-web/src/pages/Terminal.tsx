@@ -7,6 +7,13 @@ import "@xterm/xterm/css/xterm.css";
 import { useI18n } from "../i18n/useI18n";
 import { usePreferences, type Theme } from "../contexts/PreferencesContext";
 
+interface TerminalControlMessage {
+  type: "input" | "resize";
+  data?: string;
+  cols?: number;
+  rows?: number;
+}
+
 function getTerminalTheme(theme: Theme) {
   if (theme === "light") {
     return {
@@ -49,6 +56,8 @@ export default function Terminal() {
   const termRef = useRef<HTMLDivElement>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const xtermRef = useRef<XTerminal | null>(null);
+  const resizeTimerRef = useRef<number | null>(null);
+  const sizeRef = useRef({ cols: 0, rows: 0 });
 
   useEffect(() => {
     if (!termRef.current || !uuid) return;
@@ -62,18 +71,46 @@ export default function Terminal() {
     const fitAddon = new FitAddon();
     term.loadAddon(fitAddon);
     term.open(termRef.current);
-    fitAddon.fit();
     xtermRef.current = term;
+
+    const syncSize = (ws?: WebSocket) => {
+      fitAddon.fit();
+      const nextSize = { cols: term.cols, rows: term.rows };
+      if (
+        nextSize.cols <= 0 ||
+        nextSize.rows <= 0 ||
+        (
+          nextSize.cols === sizeRef.current.cols &&
+          nextSize.rows === sizeRef.current.rows
+        )
+      ) {
+        return;
+      }
+      sizeRef.current = nextSize;
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        const message: TerminalControlMessage = {
+          type: "resize",
+          cols: nextSize.cols,
+          rows: nextSize.rows,
+        };
+        ws.send(JSON.stringify(message));
+      }
+    };
+
+    syncSize();
 
     term.writeln(`\x1b[36m${tx("正在连接节点...", "Connecting to agent...")}\x1b[0m`);
 
     // Connect WebSocket
     const proto = location.protocol === "https:" ? "wss:" : "ws:";
-    const ws = new WebSocket(`${proto}//${location.host}/api/ws/terminal/${uuid}`);
+    const ws = new WebSocket(
+      `${proto}//${location.host}/api/ws/terminal/${uuid}?cols=${sizeRef.current.cols}&rows=${sizeRef.current.rows}`,
+    );
     wsRef.current = ws;
 
     ws.onopen = () => {
       term.writeln(`\x1b[32m${tx("已连接。", "Connected.")}\x1b[0m\r\n`);
+      syncSize(ws);
     };
 
     ws.onmessage = (event) => {
@@ -91,20 +128,37 @@ export default function Terminal() {
     // Send terminal input to WebSocket
     term.onData((data) => {
       if (ws.readyState === WebSocket.OPEN) {
-        ws.send(data);
+        const message: TerminalControlMessage = { type: "input", data };
+        ws.send(JSON.stringify(message));
       }
     });
 
     // Handle resize
-    const handleResize = () => fitAddon.fit();
+    const scheduleResize = () => {
+      if (resizeTimerRef.current !== null) {
+        window.clearTimeout(resizeTimerRef.current);
+      }
+      resizeTimerRef.current = window.setTimeout(() => {
+        resizeTimerRef.current = null;
+        syncSize(ws);
+      }, 50);
+    };
+    const resizeObserver = new ResizeObserver(() => scheduleResize());
+    resizeObserver.observe(termRef.current);
+    const handleResize = () => scheduleResize();
     window.addEventListener("resize", handleResize);
 
     return () => {
+      if (resizeTimerRef.current !== null) {
+        window.clearTimeout(resizeTimerRef.current);
+        resizeTimerRef.current = null;
+      }
+      resizeObserver.disconnect();
       window.removeEventListener("resize", handleResize);
       ws.close();
       term.dispose();
     };
-  }, [theme, tx, uuid]);
+  }, [tx, uuid]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (!xtermRef.current) return;

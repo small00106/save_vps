@@ -10,7 +10,7 @@ import (
 	"time"
 )
 
-var signingSecret = "cloudnest-default-secret" // Override via config
+var signingSecret string
 
 func SetSigningSecret(secret string) {
 	signingSecret = secret

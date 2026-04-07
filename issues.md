@@ -10,27 +10,11 @@
 
 | 严重程度 | 问题 | 原因 | 是否修改 |
 | --- | --- | --- | --- |
-| Critical | symlink 路径校验只做词法判断，上传和删除可能越过 managed root 改写外部文件 | `ResolveManagedPath` 和 `RelativeManagedPath` 没有处理符号链接，只校验了清理后的路径；当受管目录下存在指向外部目录的 symlink 时，上传和删除会跟随到根目录外 | 保留 |
-| Critical | 默认签名密钥硬编码，可伪造所有签名 URL | `transfer/signer.go` 和 `cloudnest-agent/internal/server/auth.go` 都使用默认密钥 `cloudnest-default-secret`；未配置 `CLOUDNEST_SIGNING_SECRET` 时，签名可被直接伪造 | 保留 |
-| Critical | 首次启动自动创建 `admin/admin` 账户 | `EnsureDefaultAdmin()` 会在无用户时自动创建默认管理员；如果部署后未立即改密，管理面直接暴露 | 保留 |
-| Critical | Agent 注册 Token 使用已知弱默认值 | 未配置 `CLOUDNEST_REG_TOKEN` 时默认使用 `cloudnest-register`，且注册接口没有额外防护，默认部署风险明显 | 保留 |
-| Critical | 登录接口无速率限制，可暴力破解密码 | 登录路由在公开路由组中，没有 IP 限流、失败惩罚或账户锁定机制 | 保留 |
-| High | 浏览和下载接口会跟随 symlink 读取 managed root 外的文件或目录 | `handleBrowseDownload` 后续使用 `os.Stat`、`c.FileAttachment`、`filepath.Walk`，都会跟随 symlink，把根目录外内容暴露出来 | 保留 |
-| High | `MoveFile` 只改数据库元数据，Agent 侧真实文件不会移动 | `MoveFile` 仅修改 `files.path` 和 `files.name`，未向 Agent 下发 rename，也未同步 `file_replicas.store_path`，会导致下载路径错位 | 保留 |
-| High | 覆盖上传会先截断旧文件，传输中断时会把文件写坏 | 覆盖上传直接以 `O_TRUNC` 打开目标文件，没有先写临时文件再原子替换；一旦传输失败，旧文件先被清空 | 保留 |
-| High | 会话过期后的 401 不会让前端回到登录页 | 前端只在 `AuthProvider` 首次挂载时检查登录状态，后续 API 返回 401 时不会统一清理会话，页面会静默显示为空数据 | 保留 |
-| High | 上传初始化先落库，真实上传失败后不会回滚，留下脏数据 | `InitUpload` 在真实文件上传前就写入 `files.status=uploading` 和 `file_replicas.status=pending`，`ProxyUpload` 失败后没有回滚 | 保留 |
 | High | `install.sh` 将签名密钥写入命令行历史和 systemd unit 文件 | `SIGNING_SECRET` 通过命令行参数传递，容易进入 shell history、进程列表，并被写入 unit 文件 | 保留 |
-| High | `BroadcastToAgents` 持读锁执行网络 I/O，慢 Agent 会阻塞整个 Hub | `BroadcastToAgents` 在持有 `RLock` 时逐个 `WriteJSON`，慢连接会拖住其它 Hub 操作 | 保留 |
 | High | 指标缓冲区无上限，且 flush 逐条写库，DB 故障时可能内存无界增长 | `metricsBuffer` 是无界切片，`metricFlusher` 每 60 秒逐条 `db.Create`；一旦数据库卡住或 Agent 数量增大，堆积会明显放大 | 保留 |
 | High | 告警评估存在 N+1 查询问题 | 先查全部规则，再按规则分别查节点、指标，规则一多数据库压力会快速上升 | 保留 |
 | High | 登录、登出事件未写入审计日志 | 目前只有告警和设置更新写入 `AuditLog`，登录成功、失败、登出都没有审计记录 | 保留 |
 | High | 远程命令执行未写入审计日志 | `command.Exec` 会创建任务记录，但没有写入审计日志，无法清晰追溯谁在什么时间执行了什么命令 | 保留 |
-| High | Agent WebSocket 连接无读取超时，僵尸连接可能长期不清理 | `conn.ReadMessage()` 没有 `SetReadDeadline`，网络断链但未正常 close 时，服务端可能长期卡在读循环里 | 保留 |
-| High | 通知发送和文件代理使用无超时的 HTTP 客户端 | `notify/sender.go` 和 `api/files/proxy.go` 的外部 HTTP 请求都没有超时，异常连接会长时间挂住 goroutine | 保留 |
-| Medium | HTTP 类通知渠道把 4xx 和 5xx 当成发送成功 | Telegram、Webhook、Bark、ServerChan 只判断请求是否报错，不检查状态码和响应体；失败时仍可能被当成成功 | 保留 |
-| Medium | Agent 注册和文件复制使用无超时 HTTP 客户端，异常网络下会永久等待 | `RegisterWithMaster` 和 `replicateFile` 使用默认客户端且无 `timeout/context`，半开连接或异常代理会让任务一直阻塞 | 保留 |
-| Medium | WS 断线后任务结果会被静默吞掉 | `SendJSON` 在 `conn == nil` 时直接返回 `nil`，调用方会误以为发送成功，导致命令执行、校验、复制结果丢失 | 保留 |
 | Medium | Dashboard 每次节点状态变化都会触发全量 HTTP 拉取 | `statusVersion` 变化后会重新 `getNodes()` 和 `getSettings()`，实时推送被当成全量拉取触发器，扩展性较差 | 保留 |
 | Medium | 网速计算硬编码采样间隔，且包级状态无并发保护 | `reporter/metrics.go` 直接用 `/10` 计算速率，并依赖包级 `lastNetIn/lastNetOut`，心跳间隔变化或并发调用时结果会错 | 保留 |
 | Medium | 命令结果轮询无取消机制，最长持续 60 秒，离开页面后仍会继续请求 | `handleExecCommand` 轮询 60 次且没有 abort 机制；组件卸载后请求仍会继续跑，存在资源浪费和状态更新风险 | 保留 |
@@ -53,7 +37,7 @@
 | Low | `UpdateSettings` 无键白名单，允许写入任意设置键 | 现在更像“会产生无效脏配置键”，但当前代码里这些自定义键并未明显驱动关键行为；原表述里“可污染任意配置影响应用行为”偏重 | 降级 |
 | Low | Agent WebSocket 重连循环不响应 context 取消 | `Connect()` 的确不接受 cancel，但当前进程收到退出信号后会直接结束；它更像优雅退出不足，而不是持续性运行 bug | 降级 |
 | Low | 终端代理双 goroutine 关闭协调不完整 | 代码清理确实不够漂亮，但更偏资源回收边角问题，未看到会稳定复现的高危错误路径 | 降级 |
-| Low | `generateInstallScript` 中 `masterURL` 直接字符串插值，存在脚本注入边界风险 | 只有在 Host 头可被异常代理或恶意流量控制时才比较值得担心；正常个人部署场景优先级很低 | 降级 |
+| Low | `generateInstallScript` 中 `masterURL` 直接字符串插值，存在脚本注入边界风险 | 只有在 Host 头可被异常代理或恶意流量控制时才比较值得担心；现在可通过显式设置 `CLOUDNEST_PUBLIC_BASE_URL` 绕开这类场景，正常个人部署优先级很低 | 降级 |
 | Low | `ScanDirectories` 无文件数量、深度上限，大目录场景下代价会很大 | 这是实际存在的扩展性问题，但是否会成为故障高度依赖你受管目录规模；若目录可控且不大，优先级可后放 | 降级 |
 | Low | `Tags` 字段存储裸字符串无格式验证 | 后端确实允许写入任意字符串，但前端已有 `try/catch` 兜底；在只通过自家前端操作时影响很有限 | 降级 |
 
@@ -72,4 +56,4 @@
 | - | `AlertChannel` 缺少 DELETE 接口 | 这是功能缺口，不是 bug | 删除 |
 | - | 审计日志查询硬限 200 条且无分页 | 这是能力不足或产品迭代项，不属于当前错误行为 | 删除 |
 | - | `dbcore.DB()` 在初始化失败后返回 nil，调用方会 panic | 主启动路径上 `dbcore.Init` 失败会直接 `log.Fatalf` 退出，当前运行路径不会继续带着 nil DB 提供服务；原问题不构成现网 bug | 删除 |
-
+| - | 首次启动自动创建 `admin/admin` 账户 | 当前项目明确定位为个人使用、单管理员场景；前端已在首次使用默认密码登录后弹出一次全系统提醒，并在文档中注明这是保留的初始入口设计，因此不再继续作为问题跟踪 | 删除 |

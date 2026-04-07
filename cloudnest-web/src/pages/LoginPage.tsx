@@ -4,7 +4,7 @@ import { Lock, User, ArrowRight, Loader2 } from "lucide-react";
 import { useI18n } from "../i18n/useI18n";
 
 export default function LoginPage() {
-  const { login } = useAuth();
+  const { login, notice, clearNotice } = useAuth();
   const { tx } = useI18n();
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
@@ -13,6 +13,7 @@ export default function LoginPage() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    clearNotice();
     setError("");
     setLoading(true);
     try {
@@ -88,6 +89,11 @@ export default function LoginPage() {
         </div>
 
         {/* Error message */}
+        {notice && (
+          <div className="mb-6 rounded-xl border border-accent/20 bg-accent/10 px-4 py-3 text-sm text-text-primary animate-slide-up">
+            {notice}
+          </div>
+        )}
         {error && (
           <div className="mb-6 rounded-xl bg-offline/10 border border-offline/20 px-4 py-3 text-sm text-offline animate-slide-up">
             {error}
@@ -144,8 +150,15 @@ export default function LoginPage() {
               {tx("登录", "Sign in")}
               <ArrowRight className="h-4 w-4" />
             </>
-          )}
+            )}
         </button>
+
+        <p className="mt-4 text-center text-xs text-text-muted">
+          {tx(
+            "默认管理员账号为 admin/admin。个人项目会保留这个初始入口，并在首次使用默认密码登录后弹出一次修改提醒。",
+            "The default admin account is `admin/admin`. This personal project keeps it as the initial entry point and shows a one-time password-change reminder after the first login with the default password.",
+          )}
+        </p>
       </form>
     </div>
   );

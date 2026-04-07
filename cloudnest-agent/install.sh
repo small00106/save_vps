@@ -4,6 +4,9 @@ set -e
 # CloudNest Agent Installation Script
 # Usage:
 #   bash install.sh --master https://master.example.com --token <registration_token> --secret <signing_secret>
+# Token/secret come from the master's secrets directory:
+#   reg_token      -> data/secrets/reg_token
+#   signing_secret -> data/secrets/signing_secret
 
 INSTALL_DIR="/opt/cloudnest-agent"
 SERVICE_NAME="cloudnest-agent"
@@ -35,13 +38,13 @@ if [ -z "$MASTER_URL" ]; then
 fi
 
 if [ -z "$REG_TOKEN" ]; then
-    echo "Error: --token is required"
+    echo "Error: --token is required (read it from the master's secrets/reg_token)"
     echo "Usage: install.sh --master <master_url> --token <token> --secret <secret>"
     exit 1
 fi
 
 if [ -z "$SIGNING_SECRET" ]; then
-    echo "Error: --secret is required (the CLOUDNEST_SIGNING_SECRET value from your master)"
+    echo "Error: --secret is required (read it from the master's secrets/signing_secret)"
     exit 1
 fi
 

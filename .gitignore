@@ -34,4 +34,7 @@ Thumbs.db
 .claude/
 
 # Local release artifacts
-release/
+release/dist/
+release/*.exe
+release/*.tar.gz
+release/checksums.txt

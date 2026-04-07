@@ -35,6 +35,8 @@ var (
 
 const fileTreeInterval = 10 * time.Second
 
+var replicationHTTPClient = &http.Client{Timeout: 60 * time.Second}
+
 func managedScanDirs(cfg *Config) []string {
 	filesDir := storage.FilesDir()
 	dirs := []string{filesDir}
@@ -62,6 +64,9 @@ func Run(cfg *Config) error {
 	log.Printf("Starting CloudNest Agent (UUID: %s)", cfg.UUID)
 	currentUUID = cfg.UUID
 
+	if err := agentServer.LoadSigningSecretFromEnv(); err != nil {
+		return err
+	}
 	if err := storage.EnsureDataDirs(); err != nil {
 		return fmt.Errorf("failed to initialize data directory: %w", err)
 	}
@@ -91,6 +96,8 @@ func Run(cfg *Config) error {
 				"file_id":       event.FileID,
 				"relative_path": event.RelativePath,
 				"store_path":    event.StorePath,
+				"size":          event.Size,
+				"mod_time":      event.ModTime,
 			})
 		}
 	}
@@ -511,55 +518,84 @@ func replicateFile(client *ws.Client, params json.RawMessage) {
 		return
 	}
 
-	// Download from source agent
-	resp, err := http.Get(data.SourceURL)
-	if err != nil {
-		log.Printf("[FILE] Replicate download error: %v", err)
-		client.Send("agent.replicateResult", map[string]interface{}{
+	sendReplicateFailure := func(message string, err error) {
+		if err != nil {
+			log.Printf("[FILE] %s: %v", message, err)
+			message = err.Error()
+		} else {
+			log.Printf("[FILE] %s", message)
+		}
+		if sendErr := client.Send("agent.replicateResult", map[string]interface{}{
 			"file_id": data.FileID,
 			"success": false,
-			"error":   err.Error(),
-		})
+			"error":   message,
+		}); sendErr != nil {
+			log.Printf("[FILE] Failed to send replicateResult for %s: %v", data.FileID, sendErr)
+		}
+	}
+
+	// Download from source agent
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, data.SourceURL, nil)
+	if err != nil {
+		sendReplicateFailure("replicate request error", err)
+		return
+	}
+
+	resp, err := replicationHTTPClient.Do(req)
+	if err != nil {
+		sendReplicateFailure("replicate download error", err)
 		return
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		log.Printf("[FILE] Replicate download status: %d", resp.StatusCode)
-		client.Send("agent.replicateResult", map[string]interface{}{
-			"file_id": data.FileID,
-			"success": false,
-			"error":   fmt.Sprintf("HTTP %d", resp.StatusCode),
-		})
+		sendReplicateFailure(fmt.Sprintf("HTTP %d", resp.StatusCode), nil)
 		return
 	}
 
 	// Save locally
 	dir, err := storage.EnsureShardDir(data.FileID)
 	if err != nil {
-		log.Printf("[FILE] Replicate mkdir error: %v", err)
+		sendReplicateFailure("replicate mkdir error", err)
 		return
 	}
 
 	filePath := fmt.Sprintf("%s/%s", dir, data.FileID)
 	f, err := os.Create(filePath)
 	if err != nil {
-		log.Printf("[FILE] Replicate create error: %v", err)
+		sendReplicateFailure("replicate create error", err)
 		return
 	}
 
 	if _, err := io.Copy(f, resp.Body); err != nil {
 		f.Close()
 		os.Remove(filePath)
-		log.Printf("[FILE] Replicate write error: %v", err)
+		sendReplicateFailure("replicate write error", err)
 		return
 	}
-	f.Close()
+	if err := f.Close(); err != nil {
+		_ = os.Remove(filePath)
+		sendReplicateFailure("replicate close error", err)
+		return
+	}
 
 	// Notify master
-	client.Send("agent.fileStored", map[string]interface{}{
-		"file_id": data.FileID,
-	})
+	info, statErr := os.Stat(filePath)
+	payload := map[string]interface{}{
+		"file_id":    data.FileID,
+		"store_path": filePath,
+	}
+	if statErr == nil {
+		payload["size"] = info.Size()
+		payload["mod_time"] = info.ModTime()
+	}
+	if err := client.Send("agent.fileStored", payload); err != nil {
+		log.Printf("[FILE] Failed to send fileStored for %s: %v", data.FileID, err)
+		return
+	}
 	log.Printf("[FILE] Replicated: %s", data.FileID)
 }
 

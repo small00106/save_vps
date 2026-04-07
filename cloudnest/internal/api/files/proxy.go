@@ -15,6 +15,8 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+var agentProxyHTTPClient = &http.Client{Timeout: 60 * time.Second}
+
 func writeProxyResponse(c *gin.Context, resp *http.Response) {
 	for k, vs := range resp.Header {
 		for _, v := range vs {
@@ -44,6 +46,10 @@ func signedUploadResource(fileID, path, name, overwrite string) string {
 		cleanPath = "/"
 	}
 	return fmt.Sprintf("%s|%s|%s|%t", fileID, cleanPath, cleanName, strings.EqualFold(strings.TrimSpace(overwrite), "true"))
+}
+
+func signedMoveResource(fromPath, toPath string) string {
+	return fmt.Sprintf("%s|%s", strings.TrimSpace(fromPath), strings.TrimSpace(toPath))
 }
 
 // ProxyUpload handles PUT /api/proxy/upload/:file_id?node=<uuid>
@@ -91,7 +97,7 @@ func ProxyUpload(c *gin.Context) {
 		req.Header.Set("Content-Type", ct)
 	}
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := agentProxyHTTPClient.Do(req)
 	if err != nil {
 		log.Printf("[Proxy] Upload to agent %s failed: %v", nodeUUID, err)
 		c.JSON(http.StatusBadGateway, gin.H{"error": "failed to reach agent"})
@@ -127,7 +133,13 @@ func ProxyDownload(c *gin.Context) {
 		agentURL += "&filename=" + url.QueryEscape(filename)
 	}
 
-	resp, err := http.Get(agentURL)
+	req, err := http.NewRequestWithContext(c.Request.Context(), http.MethodGet, agentURL, nil)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create proxy request"})
+		return
+	}
+
+	resp, err := agentProxyHTTPClient.Do(req)
 	if err != nil {
 		log.Printf("[Proxy] Download from agent %s failed: %v", nodeUUID, err)
 		c.JSON(http.StatusBadGateway, gin.H{"error": "failed to reach agent"})
@@ -164,7 +176,13 @@ func ProxyBrowse(c *gin.Context) {
 		agentURL += "&archive=" + url.QueryEscape(archive)
 	}
 
-	resp, err := http.Get(agentURL)
+	req, err := http.NewRequestWithContext(c.Request.Context(), http.MethodGet, agentURL, nil)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create proxy request"})
+		return
+	}
+
+	resp, err := agentProxyHTTPClient.Do(req)
 	if err != nil {
 		log.Printf("[Proxy] Browse download from agent %s failed: %v", nodeUUID, err)
 		c.JSON(http.StatusBadGateway, gin.H{"error": "failed to reach agent"})

@@ -1,8 +1,13 @@
 package server
 
 import (
+	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/gin-gonic/gin"
 )
 
 func TestGenerateInstallScriptSetsSystemdHome(t *testing.T) {
@@ -39,5 +44,59 @@ func TestGenerateInstallScriptHandlesBinaryUpgrade(t *testing.T) {
 		if !strings.Contains(script, snippet) {
 			t.Fatalf("generated install script missing %q", snippet)
 		}
+	}
+}
+
+func TestResolvePublicBaseURLUsesEnvOverride(t *testing.T) {
+	req := httptest.NewRequest("GET", "http://ignored.example/install.sh", nil)
+	req.Host = "ignored.example"
+	req.Header.Set("X-Forwarded-Proto", "https")
+
+	got := resolvePublicBaseURL(req, func(key string) string {
+		if key == publicBaseURLEnvKey {
+			return "https://ops.example.com/"
+		}
+		return ""
+	})
+
+	if got != "https://ops.example.com" {
+		t.Fatalf("expected env override, got %q", got)
+	}
+}
+
+func TestServeAgentBinaryUsesExecutableDir(t *testing.T) {
+	t.Setenv("GIN_MODE", "release")
+	gin.SetMode(gin.ReleaseMode)
+
+	tmpDir := t.TempDir()
+	binaryDir := filepath.Join(tmpDir, "data", "binaries")
+	if err := os.MkdirAll(binaryDir, 0o755); err != nil {
+		t.Fatalf("mkdir binary dir: %v", err)
+	}
+	expectedContent := []byte("agent-binary")
+	if err := os.WriteFile(filepath.Join(binaryDir, "cloudnest-agent-linux-amd64"), expectedContent, 0o755); err != nil {
+		t.Fatalf("write binary: %v", err)
+	}
+
+	originalExecutablePathFunc := executablePathFunc
+	executablePathFunc = func() (string, error) {
+		return filepath.Join(tmpDir, "cloudnest"), nil
+	}
+	defer func() {
+		executablePathFunc = originalExecutablePathFunc
+	}()
+
+	router := gin.New()
+	router.GET("/download/agent/:os/:arch", serveAgentBinary)
+
+	req := httptest.NewRequest("GET", "/download/agent/linux/amd64", nil)
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, req)
+
+	if recorder.Code != 200 {
+		t.Fatalf("expected 200, got %d: %s", recorder.Code, recorder.Body.String())
+	}
+	if body := recorder.Body.String(); body != string(expectedContent) {
+		t.Fatalf("unexpected body %q", body)
 	}
 }

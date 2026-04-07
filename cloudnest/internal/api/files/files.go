@@ -6,15 +6,19 @@ import (
 	"net/http"
 	"net/url"
 	stdpath "path"
+	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/cloudnest/cloudnest/internal/api/agent"
 	"github.com/cloudnest/cloudnest/internal/cache"
 	"github.com/cloudnest/cloudnest/internal/database/dbcore"
 	"github.com/cloudnest/cloudnest/internal/database/models"
+	"github.com/cloudnest/cloudnest/internal/transfer"
 	"github.com/cloudnest/cloudnest/internal/ws"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
+	"gorm.io/gorm"
 )
 
 // BrowseNodeFiles handles GET /api/nodes/:uuid/files?path=
@@ -176,28 +180,6 @@ func InitUpload(c *gin.Context) {
 		fileID = uuid.New().String()
 	}
 
-	file := models.File{
-		FileID: fileID,
-		Name:   req.Name,
-		Path:   req.Path,
-		Size:   req.Size,
-		Status: "uploading",
-	}
-	dbcore.DB().Save(&file)
-	if exists {
-		dbcore.DB().Model(&models.FileReplica{}).
-			Where("file_id = ? AND node_uuid != ?", fileID, node.UUID).
-			Update("status", "lost")
-	}
-
-	replica := models.FileReplica{
-		FileID:   fileID,
-		NodeUUID: node.UUID,
-		Status:   "pending",
-	}
-	dbcore.DB().Where("file_id = ? AND node_uuid = ?", fileID, node.UUID).Delete(&models.FileReplica{})
-	dbcore.DB().Create(&replica)
-
 	proxyURL := fmt.Sprintf(
 		"/api/proxy/upload/%s?node=%s&path=%s&name=%s&overwrite=%t",
 		fileID,
@@ -332,15 +314,83 @@ func MoveFile(c *gin.Context) {
 		return
 	}
 
-	updates := map[string]interface{}{}
-	if req.NewPath != "" {
-		updates["path"] = req.NewPath
-	}
-	if req.NewName != "" {
-		updates["name"] = req.NewName
+	var file models.File
+	if err := dbcore.DB().Where("file_id = ? AND status != ?", fileID, "deleting").First(&file).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "file not found"})
+		return
 	}
 
-	dbcore.DB().Model(&models.File{}).Where("file_id = ?", fileID).Updates(updates)
+	newPath := normalizeNodePath(file.Path)
+	if strings.TrimSpace(req.NewPath) != "" {
+		newPath = normalizeNodePath(req.NewPath)
+	}
+	newName := strings.TrimSpace(file.Name)
+	if strings.TrimSpace(req.NewName) != "" {
+		newName = strings.TrimSpace(req.NewName)
+	}
+
+	fromPath := logicalManagedFilePath(file.Path, file.Name)
+	toPath := logicalManagedFilePath(newPath, newName)
+	if fromPath == toPath {
+		c.JSON(http.StatusOK, gin.H{"message": "file moved"})
+		return
+	}
+
+	var replicas []models.FileReplica
+	if err := dbcore.DB().
+		Where("file_id = ? AND status = ?", fileID, "stored").
+		Find(&replicas).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to query replicas"})
+		return
+	}
+	if len(replicas) != 1 {
+		c.JSON(http.StatusConflict, gin.H{"error": "move only supported for a single stored replica"})
+		return
+	}
+
+	replica := replicas[0]
+	node, err := resolveNode(replica.NodeUUID)
+	if err != nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "replica node is offline"})
+		return
+	}
+
+	moveResult, err := moveManagedFileOnNode(c, node, fromPath, toPath)
+	if err != nil {
+		status := http.StatusBadGateway
+		if moveErr, ok := err.(*agentMoveError); ok {
+			status = moveErr.StatusCode
+		}
+		c.JSON(status, gin.H{"error": err.Error()})
+		return
+	}
+
+	if err := dbcore.DB().Transaction(func(tx *gorm.DB) error {
+		if err := tx.Model(&models.File{}).
+			Where("file_id = ?", fileID).
+			Updates(map[string]interface{}{
+				"path": newPath,
+				"name": newName,
+			}).Error; err != nil {
+			return err
+		}
+		return tx.Model(&models.FileReplica{}).
+			Where("file_id = ? AND node_uuid = ?", fileID, replica.NodeUUID).
+			Update("store_path", moveResult.StorePath).Error
+	}); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to update moved file metadata"})
+		return
+	}
+
+	agent.RemoveFileTreeEntry(replica.NodeUUID, fromPath)
+	agent.UpsertFileTreeEntry(replica.NodeUUID, agent.FileEntry{
+		Path:    moveResult.RelativePath,
+		Name:    newName,
+		Size:    file.Size,
+		IsDir:   false,
+		ModTime: moveResult.ModTime,
+	})
+
 	c.JSON(http.StatusOK, gin.H{"message": "file moved"})
 }
 
@@ -435,4 +485,55 @@ func baseNameFromPath(p string, fallback string) string {
 		return "download"
 	}
 	return name
+}
+
+type agentMoveResult struct {
+	RelativePath string    `json:"relative_path"`
+	StorePath    string    `json:"store_path"`
+	ModTime      time.Time `json:"mod_time"`
+}
+
+type agentMoveError struct {
+	StatusCode int
+	Message    string
+}
+
+func (e *agentMoveError) Error() string {
+	return e.Message
+}
+
+func moveManagedFileOnNode(c *gin.Context, node *models.Node, fromPath, toPath string) (*agentMoveResult, error) {
+	agentBase := fmt.Sprintf("http://%s:%d/api/files/move", node.IP, node.Port)
+	agentURL := transfer.GenerateSignedURL(agentBase, signedMoveResource(fromPath, toPath), http.MethodPost, 5*time.Minute)
+	agentURL += "&from=" + url.QueryEscape(fromPath)
+	agentURL += "&to=" + url.QueryEscape(toPath)
+
+	req, err := http.NewRequestWithContext(c.Request.Context(), http.MethodPost, agentURL, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		message := "agent move failed"
+		var payload map[string]string
+		if err := json.NewDecoder(resp.Body).Decode(&payload); err == nil && strings.TrimSpace(payload["error"]) != "" {
+			message = payload["error"]
+		}
+		return nil, &agentMoveError{StatusCode: resp.StatusCode, Message: message}
+	}
+
+	var result agentMoveResult
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(result.StorePath) != "" {
+		result.StorePath = filepath.ToSlash(strings.TrimSpace(result.StorePath))
+	}
+	return &result, nil
 }

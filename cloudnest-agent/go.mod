@@ -3,6 +3,7 @@ module github.com/cloudnest/cloudnest-agent
 go 1.24.0
 
 require (
+	github.com/creack/pty v1.1.24
 	github.com/gin-gonic/gin v1.10.0
 	github.com/gorilla/websocket v1.5.3
 	github.com/shirou/gopsutil/v4 v4.25.2

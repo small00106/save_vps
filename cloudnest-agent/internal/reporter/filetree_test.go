@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/cloudnest/cloudnest-agent/internal/testutil"
 )
 
 func TestScanDirectoriesReportsRelativePaths(t *testing.T) {
@@ -34,5 +36,28 @@ func TestScanDirectoriesReportsRelativePaths(t *testing.T) {
 	}
 	if fileEntry.Name != "hello.txt" {
 		t.Fatalf("expected hello.txt, got %q", fileEntry.Name)
+	}
+}
+
+func TestScanDirectoriesSkipsSymlinks(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "nested"), 0755); err != nil {
+		t.Fatalf("mkdir nested: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "nested", "hello.txt"), []byte("hello"), 0644); err != nil {
+		t.Fatalf("write hello: %v", err)
+	}
+
+	outside := filepath.Join(t.TempDir(), "outside.txt")
+	if err := os.WriteFile(outside, []byte("outside"), 0644); err != nil {
+		t.Fatalf("write outside: %v", err)
+	}
+	testutil.CreateSymlinkOrSkip(t, outside, filepath.Join(root, "nested", "linked.txt"))
+
+	entries := ScanDirectories([]string{root})
+	for _, entry := range entries {
+		if entry.Path == "/nested/linked.txt" {
+			t.Fatalf("expected symlink entry to be skipped, got %#v", entry)
+		}
 	}
 }

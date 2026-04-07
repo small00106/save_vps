@@ -4,7 +4,6 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"net/http"
-	"os"
 	"strings"
 	"time"
 
@@ -13,6 +12,12 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 )
+
+var registrationToken string
+
+func SetRegistrationToken(token string) {
+	registrationToken = strings.TrimSpace(token)
+}
 
 // RegisterRequest is the body for agent registration.
 type RegisterRequest struct {
@@ -32,13 +37,13 @@ type RegisterRequest struct {
 // Register handles POST /api/agent/register
 func Register(c *gin.Context) {
 	// Validate registration token
-	regToken := os.Getenv("CLOUDNEST_REG_TOKEN")
-	if regToken == "" {
-		regToken = "cloudnest-register"
+	if registrationToken == "" {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "registration token is not configured"})
+		return
 	}
 
 	auth := c.GetHeader("Authorization")
-	if !strings.HasPrefix(auth, "Bearer ") || strings.TrimPrefix(auth, "Bearer ") != regToken {
+	if !strings.HasPrefix(auth, "Bearer ") || strings.TrimPrefix(auth, "Bearer ") != registrationToken {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid registration token"})
 		return
 	}

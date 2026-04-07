@@ -6,8 +6,11 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"path"
 	"path/filepath"
+	"runtime"
 	"strings"
+	"time"
 
 	"github.com/cloudnest/cloudnest-agent/internal/storage"
 	"github.com/cloudnest/cloudnest-agent/internal/terminal"
@@ -20,6 +23,8 @@ type StoredFileEvent struct {
 	FileID       string
 	RelativePath string
 	StorePath    string
+	Size         int64
+	ModTime      time.Time
 }
 
 var OnFileStored func(event StoredFileEvent)
@@ -42,6 +47,7 @@ func Start(addr string, rateLimit int64) error {
 	{
 		api.PUT("/files/:file_id", validateSignedURL(), handleUpload)
 		api.GET("/files/:file_id", validateSignedURL(), handleDownload)
+		api.POST("/files/move", validateSignedURL(), handleMove)
 		api.GET("/browse", validateSignedURL(), handleBrowseDownload)
 		api.GET("/health", func(c *gin.Context) {
 			c.JSON(http.StatusOK, gin.H{"status": "ok"})
@@ -63,6 +69,9 @@ func validateSignedURL() gin.HandlerFunc {
 		}
 		if resourceID == "" {
 			resourceID = c.Query("path")
+		}
+		if resourceID == "" && c.Request.Method == http.MethodPost && c.FullPath() == "/api/files/move" {
+			resourceID = signedMoveResource(c.Query("from"), c.Query("to"))
 		}
 		if resourceID == "" {
 			resourceID = c.Query("id")
@@ -96,13 +105,16 @@ func handleUpload(c *gin.Context) {
 	relativePath := ""
 	var err error
 	if name == "" {
-		var dir string
-		dir, err = storage.EnsureShardDir(fileID)
+		_, err = storage.EnsureShardDir(fileID)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create directory"})
 			return
 		}
-		filePath = filepath.Join(dir, fileID)
+		filePath, err = storage.FilePath(fileID)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to resolve storage path"})
+			return
+		}
 	} else {
 		filePath, relativePath, err = storage.JoinManagedFilePath(c.DefaultQuery("path", "/"), name)
 		if err != nil {
@@ -124,22 +136,14 @@ func handleUpload(c *gin.Context) {
 		}
 	}
 
-	flags := os.O_CREATE | os.O_WRONLY
-	if overwrite || name == "" {
-		flags |= os.O_TRUNC
-	} else {
-		flags |= os.O_EXCL
-	}
-
-	f, err := os.OpenFile(filePath, flags, 0644)
+	info, err := writeUploadedFile(filePath, overwrite || name == "", c.Request.Body)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create file"})
-		return
-	}
-	defer f.Close()
-
-	if _, err := io.Copy(f, c.Request.Body); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to write file"})
+		switch {
+		case os.IsExist(err):
+			c.JSON(http.StatusConflict, gin.H{"error": "file already exists"})
+		default:
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to write file"})
+		}
 		return
 	}
 
@@ -149,6 +153,8 @@ func handleUpload(c *gin.Context) {
 			FileID:       fileID,
 			RelativePath: relativePath,
 			StorePath:    filePath,
+			Size:         info.Size(),
+			ModTime:      info.ModTime(),
 		})
 	}
 
@@ -157,6 +163,86 @@ func handleUpload(c *gin.Context) {
 		"file_id":       fileID,
 		"relative_path": relativePath,
 		"store_path":    filePath,
+		"size":          info.Size(),
+		"mod_time":      info.ModTime(),
+	})
+}
+
+func handleMove(c *gin.Context) {
+	fromPath := strings.TrimSpace(c.Query("from"))
+	toPath := strings.TrimSpace(c.Query("to"))
+	if fromPath == "" || toPath == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "from and to are required"})
+		return
+	}
+
+	sourceAbs, sourceRel, err := storage.ResolveManagedPath(fromPath)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	sourceInfo, err := os.Stat(sourceAbs)
+	if os.IsNotExist(err) {
+		c.JSON(http.StatusNotFound, gin.H{"error": "source file not found"})
+		return
+	}
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to stat source file"})
+		return
+	}
+	if sourceInfo.IsDir() {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "directory move is not supported"})
+		return
+	}
+
+	targetPath := storage.NormalizeManagedDirPath(toPath)
+	targetDir := path.Dir(targetPath)
+	targetName := path.Base(targetPath)
+	if targetName == "." || targetName == "/" || targetPath == "/" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid target path"})
+		return
+	}
+
+	targetAbs, targetRel, err := storage.JoinManagedFilePath(targetDir, targetName)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if sourceRel == targetRel {
+		c.JSON(http.StatusOK, gin.H{
+			"relative_path": targetRel,
+			"store_path":    sourceAbs,
+			"mod_time":      sourceInfo.ModTime(),
+		})
+		return
+	}
+	if _, err := os.Stat(targetAbs); err == nil {
+		c.JSON(http.StatusConflict, gin.H{"error": "target file already exists"})
+		return
+	} else if !os.IsNotExist(err) {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to stat target file"})
+		return
+	}
+	if err := os.MkdirAll(filepath.Dir(targetAbs), 0755); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create target directory"})
+		return
+	}
+
+	if err := os.Rename(sourceAbs, targetAbs); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to move file"})
+		return
+	}
+
+	targetInfo, err := os.Stat(targetAbs)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to stat moved file"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"relative_path": targetRel,
+		"store_path":    targetAbs,
+		"mod_time":      targetInfo.ModTime(),
 	})
 }
 
@@ -226,6 +312,9 @@ func streamZipDirectory(c *gin.Context, dirPath, downloadName string) {
 		if err != nil {
 			return err
 		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return nil
+		}
 		if info.IsDir() {
 			return nil
 		}
@@ -279,4 +368,61 @@ func sanitizeAttachmentName(name, fallback string) string {
 		return "download"
 	}
 	return n
+}
+
+func writeUploadedFile(targetPath string, overwrite bool, body io.Reader) (os.FileInfo, error) {
+	parentDir := filepath.Dir(targetPath)
+	tempFile, err := os.CreateTemp(parentDir, ".cloudnest-upload-*")
+	if err != nil {
+		return nil, err
+	}
+	tempPath := tempFile.Name()
+	cleanup := func() {
+		_ = tempFile.Close()
+		_ = os.Remove(tempPath)
+	}
+
+	if err := tempFile.Chmod(0644); err != nil && runtime.GOOS != "windows" {
+		cleanup()
+		return nil, err
+	}
+
+	if _, err := io.Copy(tempFile, body); err != nil {
+		cleanup()
+		return nil, err
+	}
+	if err := tempFile.Close(); err != nil {
+		_ = os.Remove(tempPath)
+		return nil, err
+	}
+
+	if !overwrite {
+		if _, err := os.Stat(targetPath); err == nil {
+			_ = os.Remove(tempPath)
+			return nil, os.ErrExist
+		} else if !os.IsNotExist(err) {
+			_ = os.Remove(tempPath)
+			return nil, err
+		}
+	}
+
+	if err := replaceFile(tempPath, targetPath, overwrite); err != nil {
+		_ = os.Remove(tempPath)
+		return nil, err
+	}
+
+	return os.Stat(targetPath)
+}
+
+func replaceFile(tempPath, targetPath string, overwrite bool) error {
+	if !overwrite {
+		return os.Rename(tempPath, targetPath)
+	}
+
+	if runtime.GOOS == "windows" {
+		if err := os.Remove(targetPath); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+	}
+	return os.Rename(tempPath, targetPath)
 }

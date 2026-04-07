@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	stdpath "path"
 	"strings"
 	"time"
 
@@ -13,11 +14,18 @@ import (
 	"github.com/cloudnest/cloudnest/internal/ws"
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
+	"gorm.io/gorm"
 )
 
 var upgrader = websocket.Upgrader{
 	CheckOrigin: func(r *http.Request) bool { return true },
 }
+
+const (
+	agentWSMaxMessageSize = 32 << 20
+	agentWSPongWait       = 70 * time.Second
+	agentWSPingPeriod     = (agentWSPongWait * 9) / 10
+)
 
 // HeartbeatParams is the params for agent.heartbeat.
 type HeartbeatParams struct {
@@ -84,6 +92,7 @@ func WebSocketHandler(c *gin.Context) {
 	}
 
 	safeConn := ws.NewSafeConn(conn)
+	configureAgentConnection(conn)
 	hub := ws.GetHub()
 
 	hub.Register(node.UUID, &ws.AgentInfo{
@@ -109,7 +118,11 @@ func WebSocketHandler(c *gin.Context) {
 	// Push all enabled ping tasks to this agent
 	go pushPingTasks(safeConn)
 
+	pingStop := make(chan struct{})
+	go keepAgentConnectionAlive(node.UUID, safeConn, pingStop)
+
 	defer func() {
+		close(pingStop)
 		// If this connection has already been replaced by a newer one, do not
 		// unregister or mark node offline.
 		if !hub.UnregisterIfCurrent(node.UUID, safeConn) {
@@ -138,6 +151,32 @@ func WebSocketHandler(c *gin.Context) {
 		}
 
 		handleAgentMessage(node.UUID, &msg)
+	}
+}
+
+func configureAgentConnection(conn *websocket.Conn) {
+	conn.SetReadLimit(agentWSMaxMessageSize)
+	_ = conn.SetReadDeadline(time.Now().Add(agentWSPongWait))
+	conn.SetPongHandler(func(string) error {
+		return conn.SetReadDeadline(time.Now().Add(agentWSPongWait))
+	})
+}
+
+func keepAgentConnectionAlive(uuid string, conn *ws.SafeConn, stop <-chan struct{}) {
+	ticker := time.NewTicker(agentWSPingPeriod)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			if err := conn.WriteControl(websocket.PingMessage, []byte("ping"), time.Now().Add(10*time.Second)); err != nil {
+				log.Printf("[WS] Ping error to %s: %v", uuid, err)
+				_ = conn.Close()
+				return
+			}
+		case <-stop:
+			return
+		}
 	}
 }
 
@@ -264,34 +303,74 @@ func handleFileTree(uuid string, params json.RawMessage) {
 
 func handleFileStored(uuid string, params json.RawMessage) {
 	var data struct {
-		FileID       string `json:"file_id"`
-		StorePath    string `json:"store_path"`
-		RelativePath string `json:"relative_path"`
+		FileID       string    `json:"file_id"`
+		StorePath    string    `json:"store_path"`
+		RelativePath string    `json:"relative_path"`
+		Size         int64     `json:"size"`
+		ModTime      time.Time `json:"mod_time"`
 	}
 	if err := json.Unmarshal(params, &data); err != nil {
 		return
 	}
 
-	updates := map[string]interface{}{
-		"status": "stored",
-	}
-	if strings.TrimSpace(data.StorePath) != "" {
-		updates["store_path"] = data.StorePath
-	}
-	dbcore.DB().Model(&models.FileReplica{}).
-		Where("file_id = ? AND node_uuid = ?", data.FileID, uuid).
-		Updates(updates)
+	relativePath := normalizeStoredRelativePath(data.RelativePath)
+	if err := dbcore.DB().Transaction(func(tx *gorm.DB) error {
+		replica := models.FileReplica{
+			FileID:    data.FileID,
+			NodeUUID:  uuid,
+			Status:    "stored",
+			StorePath: strings.TrimSpace(data.StorePath),
+		}
+		if err := tx.Where("file_id = ? AND node_uuid = ?", data.FileID, uuid).
+			Assign(replica).
+			FirstOrCreate(&models.FileReplica{}).Error; err != nil {
+			return err
+		}
 
-	// Once no replica is still pending upload, the file is ready to serve.
-	var pendingCount int64
-	dbcore.DB().Model(&models.FileReplica{}).
-		Where("file_id = ? AND status IN ?", data.FileID, []string{"pending", "uploading"}).
-		Count(&pendingCount)
+		if relativePath == "" {
+			updates := map[string]interface{}{"status": "ready"}
+			if data.Size > 0 {
+				updates["size"] = data.Size
+			}
+			return tx.Model(&models.File{}).Where("file_id = ?", data.FileID).Updates(updates).Error
+		}
 
-	if pendingCount == 0 {
-		dbcore.DB().Model(&models.File{}).
-			Where("file_id = ?", data.FileID).
-			Update("status", "ready")
+		dirPath, fileName := splitManagedRelativePath(relativePath)
+		file := models.File{
+			FileID: data.FileID,
+		}
+		if err := tx.Where("file_id = ?", data.FileID).
+			Assign(models.File{
+				Name:   fileName,
+				Path:   dirPath,
+				Size:   data.Size,
+				Status: "ready",
+				IsDir:  false,
+			}).
+			FirstOrCreate(&file).Error; err != nil {
+			return err
+		}
+
+		return tx.Model(&models.FileReplica{}).
+			Where("file_id = ? AND node_uuid <> ?", data.FileID, uuid).
+			Update("status", "lost").Error
+	}); err != nil {
+		log.Printf("[FileStored] failed to persist %s on node %s: %v", data.FileID, uuid, err)
+		return
+	}
+
+	if relativePath != "" {
+		modTime := data.ModTime
+		if modTime.IsZero() {
+			modTime = time.Now()
+		}
+		UpsertFileTreeEntry(uuid, FileEntry{
+			Path:    relativePath,
+			Name:    stdpath.Base(relativePath),
+			Size:    data.Size,
+			IsDir:   false,
+			ModTime: modTime,
+		})
 	}
 
 	log.Printf("[FileStored] %s on node %s", data.FileID, uuid)
@@ -393,4 +472,29 @@ func pushPingTasks(conn *ws.SafeConn) {
 			Params:  params,
 		})
 	}
+}
+
+func normalizeStoredRelativePath(rel string) string {
+	trimmed := strings.TrimSpace(rel)
+	if trimmed == "" {
+		return ""
+	}
+	trimmed = strings.ReplaceAll(trimmed, "\\", "/")
+	cleaned := stdpath.Clean("/" + strings.TrimPrefix(trimmed, "/"))
+	if cleaned == "." || cleaned == "/" {
+		return ""
+	}
+	return cleaned
+}
+
+func splitManagedRelativePath(rel string) (string, string) {
+	cleaned := normalizeStoredRelativePath(rel)
+	if cleaned == "" {
+		return "/", ""
+	}
+	dir := stdpath.Dir(cleaned)
+	if dir == "." || dir == "" {
+		dir = "/"
+	}
+	return dir, stdpath.Base(cleaned)
 }

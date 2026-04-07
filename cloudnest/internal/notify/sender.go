@@ -4,15 +4,39 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/smtp"
 	"net/url"
 	"strings"
+	"time"
 )
 
 // Sender is the interface for notification channels.
 type Sender interface {
 	Send(title, message string) error
+}
+
+var notificationHTTPClient = &http.Client{Timeout: 10 * time.Second}
+
+func doNotificationRequest(req *http.Request) error {
+	resp, err := notificationHTTPClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= http.StatusOK && resp.StatusCode < http.StatusMultipleChoices {
+		_, _ = io.Copy(io.Discard, resp.Body)
+		return nil
+	}
+
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+	detail := strings.TrimSpace(string(body))
+	if detail == "" {
+		return fmt.Errorf("unexpected status %d", resp.StatusCode)
+	}
+	return fmt.Errorf("unexpected status %d: %s", resp.StatusCode, detail)
 }
 
 // NewSender creates a Sender from channel type and JSON config.
@@ -65,18 +89,18 @@ type TelegramSender struct {
 }
 
 func (s *TelegramSender) Send(title, message string) error {
-	url := fmt.Sprintf("https://api.telegram.org/bot%s/sendMessage", s.cfg.BotToken)
+	reqURL := fmt.Sprintf("https://api.telegram.org/bot%s/sendMessage", s.cfg.BotToken)
 	body, _ := json.Marshal(map[string]string{
-		"chat_id": s.cfg.ChatID,
-		"text":    fmt.Sprintf("*%s*\n%s", title, message),
+		"chat_id":    s.cfg.ChatID,
+		"text":       fmt.Sprintf("*%s*\n%s", title, message),
 		"parse_mode": "Markdown",
 	})
-	resp, err := http.Post(url, "application/json", bytes.NewReader(body))
+	req, err := http.NewRequest(http.MethodPost, reqURL, bytes.NewReader(body))
 	if err != nil {
 		return err
 	}
-	resp.Body.Close()
-	return nil
+	req.Header.Set("Content-Type", "application/json")
+	return doNotificationRequest(req)
 }
 
 // === Webhook ===
@@ -94,12 +118,12 @@ func (s *WebhookSender) Send(title, message string) error {
 		"title":   title,
 		"message": message,
 	})
-	resp, err := http.Post(s.cfg.URL, "application/json", bytes.NewReader(body))
+	req, err := http.NewRequest(http.MethodPost, s.cfg.URL, bytes.NewReader(body))
 	if err != nil {
 		return err
 	}
-	resp.Body.Close()
-	return nil
+	req.Header.Set("Content-Type", "application/json")
+	return doNotificationRequest(req)
 }
 
 // === Email ===
@@ -136,12 +160,11 @@ type BarkSender struct {
 
 func (s *BarkSender) Send(title, message string) error {
 	barkURL := fmt.Sprintf("%s/%s/%s", strings.TrimSuffix(s.cfg.ServerURL, "/"), url.PathEscape(title), url.PathEscape(message))
-	resp, err := http.Get(barkURL)
+	req, err := http.NewRequest(http.MethodGet, barkURL, nil)
 	if err != nil {
 		return err
 	}
-	resp.Body.Close()
-	return nil
+	return doNotificationRequest(req)
 }
 
 // === ServerChan ===
@@ -155,15 +178,15 @@ type ServerChanSender struct {
 }
 
 func (s *ServerChanSender) Send(title, message string) error {
-	url := fmt.Sprintf("https://sctapi.ftqq.com/%s.send", s.cfg.SendKey)
+	reqURL := fmt.Sprintf("https://sctapi.ftqq.com/%s.send", s.cfg.SendKey)
 	body, _ := json.Marshal(map[string]string{
 		"title": title,
 		"desp":  message,
 	})
-	resp, err := http.Post(url, "application/json", bytes.NewReader(body))
+	req, err := http.NewRequest(http.MethodPost, reqURL, bytes.NewReader(body))
 	if err != nil {
 		return err
 	}
-	resp.Body.Close()
-	return nil
+	req.Header.Set("Content-Type", "application/json")
+	return doNotificationRequest(req)
 }

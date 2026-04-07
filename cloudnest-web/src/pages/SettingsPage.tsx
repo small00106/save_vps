@@ -130,6 +130,18 @@ export default function SettingsPage() {
           </div>
         </div>
 
+        <div className="mb-4 rounded-lg bg-amber-500/10 px-3 py-2 text-sm text-amber-500">
+          {user?.default_password_notice_required
+            ? tx(
+                "当前仍在使用默认密码 admin。建议尽快在此页面完成修改。",
+                "The account is still using the default password `admin`. You should change it here soon.",
+              )
+            : tx(
+                "个人项目保留默认管理员作为初始入口；如果你还没改过默认密码，请尽快在这里更新。",
+                "This personal project keeps the default admin as the initial entry point; if you have not changed the default password yet, update it here soon.",
+              )}
+        </div>
+
         {error && (
           <div className="mb-4 rounded-lg bg-offline/10 px-3 py-2 text-sm text-offline">
             {error}

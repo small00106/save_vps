@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	agentapi "github.com/cloudnest/cloudnest/internal/api/agent"
 	"github.com/cloudnest/cloudnest/internal/cache"
@@ -55,6 +56,7 @@ func seedOnlineNode(t *testing.T, uuid, ip string, port int) {
 
 	if err := dbcore.DB().Create(&models.Node{
 		UUID:     uuid,
+		Token:    uuid + "-token",
 		Hostname: uuid,
 		IP:       ip,
 		Port:     port,
@@ -281,6 +283,22 @@ func TestInitUploadReturnsSingleProxyTarget(t *testing.T) {
 	if !strings.Contains(resp.URL, "/api/proxy/upload/") {
 		t.Fatalf("expected proxy upload url, got %q", resp.URL)
 	}
+
+	var fileCount int64
+	if err := dbcore.DB().Model(&models.File{}).Count(&fileCount).Error; err != nil {
+		t.Fatalf("count files: %v", err)
+	}
+	if fileCount != 0 {
+		t.Fatalf("expected init upload to avoid prewriting file rows, got %d", fileCount)
+	}
+
+	var replicaCount int64
+	if err := dbcore.DB().Model(&models.FileReplica{}).Count(&replicaCount).Error; err != nil {
+		t.Fatalf("count replicas: %v", err)
+	}
+	if replicaCount != 0 {
+		t.Fatalf("expected init upload to avoid prewriting replica rows, got %d", replicaCount)
+	}
 }
 
 func TestGetDownloadURLUsesManagedBrowsePath(t *testing.T) {
@@ -431,5 +449,173 @@ func TestProxyBrowseForwardsArchiveFlag(t *testing.T) {
 	}
 	if capturedFilename != "docs.zip" {
 		t.Fatalf("expected filename docs.zip, got %q", capturedFilename)
+	}
+}
+
+func TestProxyBrowseReturnsBadGatewayOnAgentTimeout(t *testing.T) {
+	initNodeFilesTestDB(t)
+
+	prevClient := agentProxyHTTPClient
+	agentProxyHTTPClient = &http.Client{Timeout: 20 * time.Millisecond}
+	defer func() {
+		agentProxyHTTPClient = prevClient
+	}()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(200 * time.Millisecond)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	u, err := neturl.Parse(server.URL)
+	if err != nil {
+		t.Fatalf("parse server url: %v", err)
+	}
+	host, portStr, err := net.SplitHostPort(u.Host)
+	if err != nil {
+		t.Fatalf("split host: %v", err)
+	}
+	var port int
+	if _, err := fmt.Sscanf(portStr, "%d", &port); err != nil {
+		t.Fatalf("parse port: %v", err)
+	}
+
+	seedOnlineNode(t, "node-timeout", host, port)
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodGet, "/api/proxy/browse?node=node-timeout&path=%2Fdocs%2Freport.txt", nil)
+
+	ProxyBrowse(c)
+
+	if w.Code != http.StatusBadGateway {
+		t.Fatalf("expected 502, got %d body=%s", w.Code, w.Body.String())
+	}
+}
+
+func TestMoveFileMovesSingleStoredReplicaViaAgent(t *testing.T) {
+	initNodeFilesTestDB(t)
+
+	var capturedFrom string
+	var capturedTo string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedFrom = r.URL.Query().Get("from")
+		capturedTo = r.URL.Query().Get("to")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"relative_path":"/archive/report-2026.txt","store_path":"/srv/data/files/archive/report-2026.txt"}`))
+	}))
+	defer server.Close()
+
+	u, err := neturl.Parse(server.URL)
+	if err != nil {
+		t.Fatalf("parse server url: %v", err)
+	}
+	host, portStr, err := net.SplitHostPort(u.Host)
+	if err != nil {
+		t.Fatalf("split host: %v", err)
+	}
+	var port int
+	if _, err := fmt.Sscanf(portStr, "%d", &port); err != nil {
+		t.Fatalf("parse port: %v", err)
+	}
+
+	seedOnlineNode(t, "node-1", host, port)
+	db := dbcore.DB()
+	if err := db.Create(&models.File{
+		FileID: "file-1",
+		Name:   "report.txt",
+		Path:   "/docs",
+		Size:   32,
+		Status: "ready",
+	}).Error; err != nil {
+		t.Fatalf("create file: %v", err)
+	}
+	if err := db.Create(&models.FileReplica{
+		FileID:    "file-1",
+		NodeUUID:  "node-1",
+		Status:    "stored",
+		StorePath: "/srv/data/files/docs/report.txt",
+	}).Error; err != nil {
+		t.Fatalf("create replica: %v", err)
+	}
+
+	body := `{"new_path":"/archive","new_name":"report-2026.txt"}`
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Params = gin.Params{{Key: "id", Value: "file-1"}}
+	c.Request = httptest.NewRequest(http.MethodPut, "/api/files/file-1/move", strings.NewReader(body))
+	c.Request.Header.Set("Content-Type", "application/json")
+
+	MoveFile(c)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", w.Code, w.Body.String())
+	}
+	if capturedFrom != "/docs/report.txt" {
+		t.Fatalf("expected from path /docs/report.txt, got %q", capturedFrom)
+	}
+	if capturedTo != "/archive/report-2026.txt" {
+		t.Fatalf("expected to path /archive/report-2026.txt, got %q", capturedTo)
+	}
+
+	var file models.File
+	if err := db.Where("file_id = ?", "file-1").First(&file).Error; err != nil {
+		t.Fatalf("load file: %v", err)
+	}
+	if file.Path != "/archive" || file.Name != "report-2026.txt" {
+		t.Fatalf("expected moved file metadata, got path=%q name=%q", file.Path, file.Name)
+	}
+
+	var replica models.FileReplica
+	if err := db.Where("file_id = ? AND node_uuid = ?", "file-1", "node-1").First(&replica).Error; err != nil {
+		t.Fatalf("load replica: %v", err)
+	}
+	if replica.StorePath != "/srv/data/files/archive/report-2026.txt" {
+		t.Fatalf("expected updated replica store_path, got %q", replica.StorePath)
+	}
+}
+
+func TestMoveFileRejectsMultiReplicaFile(t *testing.T) {
+	initNodeFilesTestDB(t)
+	seedOnlineNode(t, "node-1", "127.0.0.1", 8801)
+	seedOnlineNode(t, "node-2", "127.0.0.1", 8802)
+
+	db := dbcore.DB()
+	if err := db.Create(&models.File{
+		FileID: "file-1",
+		Name:   "report.txt",
+		Path:   "/docs",
+		Status: "ready",
+	}).Error; err != nil {
+		t.Fatalf("create file: %v", err)
+	}
+	if err := db.Create(&models.FileReplica{
+		FileID:    "file-1",
+		NodeUUID:  "node-1",
+		Status:    "stored",
+		StorePath: "/srv/data/files/docs/report.txt",
+	}).Error; err != nil {
+		t.Fatalf("create replica node-1: %v", err)
+	}
+	if err := db.Create(&models.FileReplica{
+		FileID:    "file-1",
+		NodeUUID:  "node-2",
+		Status:    "stored",
+		StorePath: "/srv/data/files/docs/report.txt",
+	}).Error; err != nil {
+		t.Fatalf("create replica node-2: %v", err)
+	}
+
+	body := `{"new_path":"/archive","new_name":"report-2026.txt"}`
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Params = gin.Params{{Key: "id", Value: "file-1"}}
+	c.Request = httptest.NewRequest(http.MethodPut, "/api/files/file-1/move", strings.NewReader(body))
+	c.Request.Header.Set("Content-Type", "application/json")
+
+	MoveFile(c)
+
+	if w.Code != http.StatusConflict {
+		t.Fatalf("expected 409, got %d body=%s", w.Code, w.Body.String())
 	}
 }

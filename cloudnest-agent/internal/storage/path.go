@@ -1,12 +1,15 @@
 package storage
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path"
 	"path/filepath"
 	"strings"
 )
+
+var errManagedSymlink = errors.New("symbolic links are not allowed in managed paths")
 
 // DataSaveDir returns the base storage directory for agent data.
 // Default: ~/data_save, can be overridden by CLOUDNEST_DATA_SAVE_DIR.
@@ -36,7 +39,11 @@ func FilePath(fileID string) (string, error) {
 	if len(fileID) < 2 {
 		return "", fmt.Errorf("invalid file id")
 	}
-	return filepath.Join(FilesDir(), fileID[:2], fileID), nil
+	filePath := filepath.Join(FilesDir(), fileID[:2], fileID)
+	if err := ensureManagedPathAllowed(filePath); err != nil {
+		return "", err
+	}
+	return filePath, nil
 }
 
 // EnsureShardDir creates and returns the shard directory for a file ID.
@@ -45,6 +52,9 @@ func EnsureShardDir(fileID string) (string, error) {
 		return "", fmt.Errorf("invalid file id")
 	}
 	dir := filepath.Join(FilesDir(), fileID[:2])
+	if err := ensureManagedPathAllowed(dir); err != nil {
+		return "", err
+	}
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return "", err
 	}
@@ -81,6 +91,9 @@ func ResolveManagedPath(relPath string) (string, string, error) {
 	if relToRoot == ".." || strings.HasPrefix(relToRoot, ".."+string(filepath.Separator)) {
 		return "", "", fmt.Errorf("path traversal not allowed")
 	}
+	if err := ensureManagedPathAllowed(candidate); err != nil {
+		return "", "", err
+	}
 	return candidate, normalized, nil
 }
 
@@ -99,8 +112,21 @@ func JoinManagedFilePath(dirPath, name string) (string, string, error) {
 	if err != nil {
 		return "", "", err
 	}
+	if info, err := os.Lstat(dirAbs); err == nil {
+		if info.Mode()&os.ModeSymlink != 0 {
+			return "", "", errManagedSymlink
+		}
+		if !info.IsDir() {
+			return "", "", fmt.Errorf("managed path is not a directory")
+		}
+	} else if !os.IsNotExist(err) {
+		return "", "", err
+	}
 
 	fileAbs := filepath.Join(dirAbs, baseName)
+	if err := ensureManagedPathAllowed(fileAbs); err != nil {
+		return "", "", err
+	}
 	relative := path.Join(dirRel, baseName)
 	if !strings.HasPrefix(relative, "/") {
 		relative = "/" + relative
@@ -122,5 +148,43 @@ func RelativeManagedPath(absPath string) (string, error) {
 	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 		return "", fmt.Errorf("path is outside managed root")
 	}
+	if err := ensureManagedPathAllowed(cleanPath); err != nil {
+		return "", err
+	}
 	return "/" + filepath.ToSlash(rel), nil
+}
+
+func ensureManagedPathAllowed(absPath string) error {
+	root := filepath.Clean(FilesDir())
+	cleanPath := filepath.Clean(absPath)
+
+	rel, err := filepath.Rel(root, cleanPath)
+	if err != nil {
+		return err
+	}
+	if rel == "." {
+		return nil
+	}
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return fmt.Errorf("path is outside managed root")
+	}
+
+	current := root
+	for index, part := range strings.Split(rel, string(filepath.Separator)) {
+		current = filepath.Join(current, part)
+		info, err := os.Lstat(current)
+		if err != nil {
+			if os.IsNotExist(err) {
+				return nil
+			}
+			return err
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return errManagedSymlink
+		}
+		if index < len(strings.Split(rel, string(filepath.Separator)))-1 && !info.IsDir() {
+			return fmt.Errorf("path component is not a directory")
+		}
+	}
+	return nil
 }

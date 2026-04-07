@@ -1,9 +1,35 @@
 const BASE = "/api";
+const AUTH_EXPIRED_EVENT = "cloudnest:auth-expired";
+
+type RequestOptions = {
+  handleUnauthorized?: boolean;
+};
+
+let authExpiredDispatched = false;
+
+function dispatchAuthExpired() {
+  if (authExpiredDispatched || typeof window === "undefined") return;
+  authExpiredDispatched = true;
+  window.dispatchEvent(new Event(AUTH_EXPIRED_EVENT));
+}
+
+export function onAuthExpired(handler: () => void) {
+  if (typeof window === "undefined") return () => {};
+
+  const listener = () => handler();
+  window.addEventListener(AUTH_EXPIRED_EVENT, listener);
+  return () => window.removeEventListener(AUTH_EXPIRED_EVENT, listener);
+}
+
+export function resetAuthExpiredState() {
+  authExpiredDispatched = false;
+}
 
 async function request<T>(
   method: string,
   path: string,
   body?: unknown,
+  options?: RequestOptions,
 ): Promise<T> {
   const opts: RequestInit = {
     method,
@@ -16,6 +42,9 @@ async function request<T>(
   const res = await fetch(`${BASE}${path}`, opts);
   if (!res.ok) {
     const text = await res.text().catch(() => "");
+    if (res.status === 401 && options?.handleUnauthorized !== false) {
+      dispatchAuthExpired();
+    }
     throw new ApiError(res.status, text || res.statusText);
   }
   if (res.status === 204) return undefined as T;
@@ -32,10 +61,10 @@ export class ApiError extends Error {
 }
 
 export const api = {
-  get: <T>(path: string) => request<T>("GET", path),
-  post: <T>(path: string, body?: unknown) => request<T>("POST", path, body),
-  put: <T>(path: string, body?: unknown) => request<T>("PUT", path, body),
-  delete: <T>(path: string) => request<T>("DELETE", path),
+  get: <T>(path: string, options?: RequestOptions) => request<T>("GET", path, undefined, options),
+  post: <T>(path: string, body?: unknown, options?: RequestOptions) => request<T>("POST", path, body, options),
+  put: <T>(path: string, body?: unknown, options?: RequestOptions) => request<T>("PUT", path, body, options),
+  delete: <T>(path: string, options?: RequestOptions) => request<T>("DELETE", path, undefined, options),
 };
 
 // ========================
@@ -44,6 +73,7 @@ export const api = {
 
 export interface User {
   username: string;
+  default_password_notice_required: boolean;
 }
 
 export interface Node {
@@ -216,15 +246,19 @@ export interface Settings {
 // ========================
 
 export function login(username: string, password: string) {
-  return api.post<{ token: string; username: string }>("/auth/login", { username, password });
+  return api.post<{ token: string; username: string; default_password_notice_required: boolean }>(
+    "/auth/login",
+    { username, password },
+    { handleUnauthorized: false },
+  );
 }
 
 export function logout() {
-  return api.post<void>("/auth/logout");
+  return api.post<void>("/auth/logout", undefined, { handleUnauthorized: false });
 }
 
 export function getMe() {
-  return api.get<{ username: string }>("/auth/me");
+  return api.get<User>("/auth/me", { handleUnauthorized: false });
 }
 
 export function changePassword(currentPassword: string, newPassword: string) {
@@ -232,6 +266,10 @@ export function changePassword(currentPassword: string, newPassword: string) {
     current_password: currentPassword,
     new_password: newPassword,
   });
+}
+
+export function acknowledgeDefaultPasswordNotice() {
+  return api.post<{ message: string }>("/auth/default-password-notice/ack");
 }
 
 // ========================

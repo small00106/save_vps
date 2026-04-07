@@ -9,9 +9,6 @@ services:
       - "8800:8800"
     volumes:
       - cloudnest-data:/app/data
-    environment:
-      - CLOUDNEST_REG_TOKEN=my-secret-token
-      - CLOUDNEST_SIGNING_SECRET=change-me-in-production
     restart: unless-stopped
 
 volumes:

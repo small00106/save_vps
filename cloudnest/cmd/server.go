@@ -11,6 +11,7 @@ import (
 	"syscall"
 	"time"
 
+	agentAPI "github.com/cloudnest/cloudnest/internal/api/agent"
 	"github.com/cloudnest/cloudnest/internal/cache"
 	"github.com/cloudnest/cloudnest/internal/database/dbcore"
 	"github.com/cloudnest/cloudnest/internal/scheduler"
@@ -48,6 +49,15 @@ func runServer(cmd *cobra.Command, args []string) {
 	}
 	log.Printf("Using database config: dbType=%s dbDSN=%s", resolvedDBType, resolvedDBDSN)
 
+	dataDir, err := resolveDataDir("", resolvedDBType, resolvedDBDSN)
+	if err != nil {
+		log.Fatalf("Failed to resolve data directory: %v", err)
+	}
+	secrets, err := resolveRuntimeSecrets(dataDir, os.Getenv)
+	if err != nil {
+		log.Fatalf("Failed to resolve runtime secrets: %v", err)
+	}
+
 	// 1. Initialize database
 	if err := dbcore.Init(resolvedDBType, resolvedDBDSN); err != nil {
 		log.Fatalf("Failed to initialize database: %v", err)
@@ -57,10 +67,9 @@ func runServer(cmd *cobra.Command, args []string) {
 	// 2. Initialize cache
 	cache.Init()
 
-	// 3. Set signing secret from env
-	if secret := os.Getenv("CLOUDNEST_SIGNING_SECRET"); secret != "" {
-		transfer.SetSigningSecret(secret)
-	}
+	// 3. Set runtime secrets
+	transfer.SetSigningSecret(secrets.SigningSecret)
+	agentAPI.SetRegistrationToken(secrets.RegistrationToken)
 
 	// 4. Start background schedulers
 	scheduler.StartAll()

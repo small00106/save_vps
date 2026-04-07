@@ -11,12 +11,23 @@ import (
 	"time"
 )
 
-var signingSecret = "cloudnest-default-secret"
+const (
+	signingSecretEnvKey = "CLOUDNEST_SIGNING_SECRET"
+	legacySigningSecret = "cloudnest-default-secret"
+)
 
-func init() {
-	if s := os.Getenv("CLOUDNEST_SIGNING_SECRET"); s != "" {
-		signingSecret = s
+var signingSecret string
+
+func LoadSigningSecretFromEnv() error {
+	secret := strings.TrimSpace(os.Getenv(signingSecretEnvKey))
+	switch {
+	case secret == "":
+		return fmt.Errorf("%s is required", signingSecretEnvKey)
+	case secret == legacySigningSecret:
+		return fmt.Errorf("%s cannot use legacy default value %q", signingSecretEnvKey, legacySigningSecret)
 	}
+	signingSecret = secret
+	return nil
 }
 
 // validateSignature checks HMAC-SHA256 signature, same algorithm as master's transfer.signer.
@@ -57,4 +68,8 @@ func signedUploadResource(fileID, path, name, overwrite string) string {
 		cleanPath = "/"
 	}
 	return fmt.Sprintf("%s|%s|%s|%t", fileID, cleanPath, cleanName, strings.EqualFold(strings.TrimSpace(overwrite), "true"))
+}
+
+func signedMoveResource(fromPath, toPath string) string {
+	return fmt.Sprintf("%s|%s", strings.TrimSpace(fromPath), strings.TrimSpace(toPath))
 }

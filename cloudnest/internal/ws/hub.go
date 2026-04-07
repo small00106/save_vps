@@ -111,10 +111,8 @@ func (h *Hub) SendToAgent(uuid string, msg *RPCMessage) error {
 
 // BroadcastToAgents sends a JSON-RPC message to all connected agents.
 func (h *Hub) BroadcastToAgents(msg *RPCMessage) {
-	h.mu.RLock()
-	defer h.mu.RUnlock()
-
-	for uuid, info := range h.agents {
+	agents := h.GetAll()
+	for uuid, info := range agents {
 		if err := info.Conn.WriteJSON(msg); err != nil {
 			log.Printf("[Hub] Failed to send to agent %s: %v", uuid, err)
 		}

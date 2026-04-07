@@ -1,9 +1,11 @@
 package server
 
 import (
+	"fmt"
 	"io/fs"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 
 	adminAPI "github.com/cloudnest/cloudnest/internal/api/admin"
@@ -22,6 +24,10 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
 )
+
+const publicBaseURLEnvKey = "CLOUDNEST_PUBLIC_BASE_URL"
+
+var executablePathFunc = os.Executable
 
 func SetupRouter() *gin.Engine {
 	gin.SetMode(gin.ReleaseMode)
@@ -54,6 +60,7 @@ func SetupRouter() *gin.Engine {
 		{
 			authed.GET("/auth/me", authAPI.Me)
 			authed.POST("/auth/change-password", authAPI.ChangePassword)
+			authed.POST("/auth/default-password-notice/ack", authAPI.AcknowledgeDefaultPasswordNotice)
 
 			// Nodes
 			authed.GET("/nodes", nodesAPI.List)
@@ -175,13 +182,23 @@ func setupFrontend(r *gin.Engine) {
 
 // serveInstallScript serves the agent install script.
 func serveInstallScript(c *gin.Context) {
-	scheme := "http"
-	if c.Request.TLS != nil || c.GetHeader("X-Forwarded-Proto") == "https" {
-		scheme = "https"
-	}
-	masterURL := scheme + "://" + c.Request.Host
+	masterURL := resolvePublicBaseURL(c.Request, os.Getenv)
 	script := generateInstallScript(masterURL)
 	c.Data(http.StatusOK, "text/plain; charset=utf-8", []byte(script))
+}
+
+func resolvePublicBaseURL(req *http.Request, getenv func(string) string) string {
+	if getenv != nil {
+		if configured := strings.TrimSpace(getenv(publicBaseURLEnvKey)); configured != "" {
+			return strings.TrimRight(configured, "/")
+		}
+	}
+
+	scheme := "http"
+	if req.TLS != nil || req.Header.Get("X-Forwarded-Proto") == "https" {
+		scheme = "https"
+	}
+	return scheme + "://" + req.Host
 }
 
 func generateInstallScript(masterURL string) string {
@@ -190,6 +207,9 @@ set -e
 
 # CloudNest Agent One-Click Installer
 # Usage: curl -sSL ` + masterURL + `/install.sh | bash -s -- --token <registration_token> --secret <signing_secret>
+# Token/secret come from the master's secrets directory:
+#   reg_token      -> data/secrets/reg_token
+#   signing_secret -> data/secrets/signing_secret
 
 MASTER_URL="` + masterURL + `"
 INSTALL_DIR="/opt/cloudnest-agent"
@@ -214,13 +234,13 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [ -z "$REG_TOKEN" ]; then
-    echo "Error: --token is required"
+    echo "Error: --token is required (read it from the master's secrets/reg_token)"
     echo "Usage: curl -sSL ${MASTER_URL}/install.sh | bash -s -- --token <token> --secret <secret>"
     exit 1
 fi
 
 if [ -z "$SIGNING_SECRET" ]; then
-    echo "Error: --secret is required (the CLOUDNEST_SIGNING_SECRET value from your master)"
+    echo "Error: --secret is required (read it from the master's secrets/signing_secret)"
     exit 1
 fi
 
@@ -300,7 +320,7 @@ echo "Config:  ~/.cloudnest/agent.json"
 }
 
 // serveAgentBinary serves pre-compiled agent binaries.
-// Binaries should be placed in ./data/binaries/cloudnest-agent-{os}-{arch}
+// Binaries should be placed in <executable-dir>/data/binaries/cloudnest-agent-{os}-{arch}
 func serveAgentBinary(c *gin.Context) {
 	osName := c.Param("os")
 	arch := c.Param("arch")
@@ -316,11 +336,8 @@ func serveAgentBinary(c *gin.Context) {
 		return
 	}
 
-	// Look for binary in data directory
-	binaryName := "cloudnest-agent-" + osName + "-" + arch
-	binaryPath := "./data/binaries/" + binaryName
-
-	if _, err := os.Stat(binaryPath); os.IsNotExist(err) {
+	binaryPath, err := resolveAgentBinaryPath(osName, arch)
+	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{
 			"error": "agent binary not found for " + osName + "/" + arch,
 			"hint":  "supported: linux/amd64, linux/arm64",
@@ -329,6 +346,19 @@ func serveAgentBinary(c *gin.Context) {
 	}
 
 	c.FileAttachment(binaryPath, "cloudnest-agent")
+}
+
+func resolveAgentBinaryPath(osName, arch string) (string, error) {
+	executablePath, err := executablePathFunc()
+	if err != nil {
+		return "", fmt.Errorf("resolve executable path: %w", err)
+	}
+
+	binaryPath := filepath.Join(filepath.Dir(executablePath), "data", "binaries", "cloudnest-agent-"+osName+"-"+arch)
+	if _, err := os.Stat(binaryPath); err != nil {
+		return "", err
+	}
+	return binaryPath, nil
 }
 
 var wsUpgrader = websocket.Upgrader{
