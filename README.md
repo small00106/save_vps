@@ -273,6 +273,7 @@ ARCHITECTURE.md             # 详细架构设计文档
 | POST | `/api/auth/login` | 登录（同一 IP 5 分钟内最多 5 次失败，第 6 次返回 `429`） |
 | POST | `/api/auth/logout` | 登出 |
 | GET | `/api/auth/me` | 获取当前用户 |
+| POST | `/api/auth/change-password` | 修改当前用户密码 |
 | POST | `/api/auth/default-password-notice/ack` | 确认默认密码提醒（全系统仅一次） |
 
 ### 节点
