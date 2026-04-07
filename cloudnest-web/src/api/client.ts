@@ -230,6 +230,11 @@ export interface AlertChannel {
 export interface AuditLog {
   id: number;
   action: string;
+  actor: string;
+  status: string;
+  target_type: string;
+  target_id: string;
+  node_uuid: string;
   detail: string;
   ip: string;
   created_at: string;
@@ -411,8 +416,17 @@ export function updateAlertChannel(id: number, data: Partial<AlertChannel>) {
 // Admin
 // ========================
 
-export function getAuditLogs() {
-  return api.get<AuditLog[]>("/admin/audit");
+export function getAuditLogs(params?: {
+  action?: string;
+  status?: string;
+  limit?: number;
+}) {
+  const search = new URLSearchParams();
+  if (params?.action) search.set("action", params.action);
+  if (params?.status) search.set("status", params.status);
+  if (params?.limit) search.set("limit", String(params.limit));
+  const query = search.toString();
+  return api.get<AuditLog[]>(`/admin/audit${query ? `?${query}` : ""}`);
 }
 
 export function getSettings() {

@@ -32,6 +32,7 @@ Thumbs.db
 
 # Claude
 .claude/
+.env
 
 # Local release artifacts
 release/dist/

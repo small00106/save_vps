@@ -45,6 +45,7 @@ import {
 } from "recharts";
 import { useI18n } from "../i18n/useI18n";
 import { useCardGlow } from "../hooks/useMouseGlow";
+import { getNodeDisplayName, parseNodeTags } from "../utils/nodeDisplayName";
 
 function formatBytes(bytes: number, decimals = 1): string {
   if (!bytes || bytes === 0) return "0 B";
@@ -55,15 +56,7 @@ function formatBytes(bytes: number, decimals = 1): string {
 }
 
 function parseTagsToInput(tags: string): string {
-  try {
-    const arr = JSON.parse(tags);
-    if (Array.isArray(arr)) {
-      return arr.map((x) => String(x)).join(", ");
-    }
-  } catch {
-    // ignore
-  }
-  return "";
+  return parseNodeTags(tags).join(", ");
 }
 
 function formatPath(path: string): string {
@@ -377,6 +370,8 @@ export default function NodeDetail() {
   }
 
   const isOnline = node.status === "online";
+  const displayName = getNodeDisplayName(node.hostname, node.tags);
+  const showHostname = displayName !== node.hostname;
 
   return (
     <div className="space-y-6 animate-[fadeIn_0.3s_ease-out]">
@@ -391,7 +386,7 @@ export default function NodeDetail() {
         
         <div className="flex flex-wrap items-center gap-4 mb-3">
           <h1 className="text-2xl font-bold bg-gradient-to-r from-purple-400 via-blue-400 to-pink-400 bg-clip-text text-transparent">
-            {node.hostname}
+            {displayName}
           </h1>
           <span
             className={`px-3 py-1 rounded-full text-xs font-semibold flex items-center gap-1.5 ${
@@ -404,6 +399,11 @@ export default function NodeDetail() {
             {node.status}
           </span>
         </div>
+        {showHostname && (
+          <div className="mb-3 text-sm text-text-secondary">
+            {tx("主机名", "Hostname")}: {node.hostname}
+          </div>
+        )}
         
         <div className="flex flex-wrap gap-x-6 gap-y-2 text-sm">
           <span className="flex items-center gap-2 text-text-secondary">
@@ -442,6 +442,9 @@ export default function NodeDetail() {
             className="h-10 w-full rounded-xl border border-white/10 bg-white/5 px-4 text-sm text-text-primary transition-all focus:border-purple-500/50 focus:bg-white/10 focus:outline-none focus:ring-2 focus:ring-purple-500/20"
             placeholder="prod, beijing, gpu"
           />
+          <p className="mt-2 text-xs text-text-muted">
+            {tx("第一个标签会作为节点显示名", "The first tag is used as the node display name")}
+          </p>
           <div className="flex items-center gap-2 mt-4">
             <button
               onClick={handleSaveTags}

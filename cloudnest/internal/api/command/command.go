@@ -2,8 +2,10 @@ package command
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 
+	"github.com/cloudnest/cloudnest/internal/audit"
 	"github.com/cloudnest/cloudnest/internal/database/dbcore"
 	"github.com/cloudnest/cloudnest/internal/database/models"
 	"github.com/cloudnest/cloudnest/internal/ws"
@@ -47,12 +49,30 @@ func Exec(c *gin.Context) {
 		task.Status = "failed"
 		task.Output = "agent not connected"
 		dbcore.DB().Save(&task)
+		audit.LogRequest(c, audit.Entry{
+			Action:     "command_exec_rejected",
+			Actor:      audit.UsernameFromContext(c),
+			Status:     audit.StatusFailed,
+			TargetType: "command_task",
+			TargetID:   audit.TargetIDFromUint(task.ID),
+			NodeUUID:   nodeUUID,
+			Detail:     fmt.Sprintf("Rejected remote command for node %s", nodeUUID),
+		})
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "agent not connected"})
 		return
 	}
 
 	task.Status = "running"
 	dbcore.DB().Save(&task)
+	audit.LogRequest(c, audit.Entry{
+		Action:     "command_exec_requested",
+		Actor:      audit.UsernameFromContext(c),
+		Status:     audit.StatusSuccess,
+		TargetType: "command_task",
+		TargetID:   audit.TargetIDFromUint(task.ID),
+		NodeUUID:   nodeUUID,
+		Detail:     fmt.Sprintf("Requested remote command %q", req.Command),
+	})
 
 	c.JSON(http.StatusOK, gin.H{
 		"task_id": task.ID,

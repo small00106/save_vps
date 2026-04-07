@@ -12,6 +12,8 @@ import (
 
 var stopCh chan struct{}
 
+const metricsInsertBatchSize = 500
+
 func StartAll() {
 	stopCh = make(chan struct{})
 
@@ -37,10 +39,19 @@ func metricFlusher(stop chan struct{}) {
 	for {
 		select {
 		case <-ticker.C:
-			items := cache.DrainMetrics()
-			for _, item := range items {
-				if metric, ok := item.(*models.NodeMetric); ok {
-					dbcore.DB().Create(metric)
+			items, dropped := cache.DrainMetrics()
+			if dropped > 0 {
+				log.Printf("[Scheduler] Metric buffer overflow dropped %d samples before flush", dropped)
+			}
+			if len(items) == 0 {
+				continue
+			}
+
+			if err := dbcore.DB().CreateInBatches(items, metricsInsertBatchSize).Error; err != nil {
+				requeueDropped := cache.PushMetrics(items)
+				log.Printf("[Scheduler] Failed to flush %d metrics (requeued): %v", len(items), err)
+				if requeueDropped > 0 {
+					log.Printf("[Scheduler] Metric buffer overflow dropped %d samples while requeueing failed flush", requeueDropped)
 				}
 			}
 		case <-stop:

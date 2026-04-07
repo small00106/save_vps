@@ -159,11 +159,16 @@ type CommandTask struct {
 }
 
 type AuditLog struct {
-	ID        uint      `gorm:"primaryKey" json:"id"`
-	Action    string    `json:"action"`
-	Detail    string    `gorm:"type:text" json:"detail"`
-	IP        string    `json:"ip"`
-	CreatedAt time.Time `json:"created_at"`
+	ID         uint      `gorm:"primaryKey" json:"id"`
+	Action     string    `gorm:"index;size:64" json:"action"`
+	Actor      string    `gorm:"size:64" json:"actor"`
+	Status     string    `gorm:"index;size:16" json:"status"`
+	TargetType string    `gorm:"size:64" json:"target_type"`
+	TargetID   string    `gorm:"size:64" json:"target_id"`
+	NodeUUID   string    `gorm:"index;size:36" json:"node_uuid"`
+	Detail     string    `gorm:"type:text" json:"detail"`
+	IP         string    `json:"ip"`
+	CreatedAt  time.Time `json:"created_at"`
 }
 
 // ==================== 系统设置 ====================

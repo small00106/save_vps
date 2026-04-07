@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/cloudnest/cloudnest/internal/audit"
 	"github.com/cloudnest/cloudnest/internal/database/dbcore"
 	"github.com/cloudnest/cloudnest/internal/database/models"
 	"github.com/gin-gonic/gin"
@@ -126,20 +127,48 @@ func Login(c *gin.Context) {
 	var user models.User
 	if err := dbcore.DB().Where("username = ?", req.Username).First(&user).Error; err != nil {
 		if decision := loginRateLimiter.recordFailure(clientIP); decision.limited {
+			audit.LogRequest(c, audit.Entry{
+				Action:     "login_failed",
+				Actor:      req.Username,
+				Status:     audit.StatusFailed,
+				TargetType: "auth",
+				Detail:     "Login rejected due to rate limit after unknown user lookup",
+			})
 			c.Header("Retry-After", strconv.Itoa(decision.retryAfter))
 			c.JSON(http.StatusTooManyRequests, gin.H{"error": "too many failed login attempts"})
 			return
 		}
+		audit.LogRequest(c, audit.Entry{
+			Action:     "login_failed",
+			Actor:      req.Username,
+			Status:     audit.StatusFailed,
+			TargetType: "auth",
+			Detail:     "Invalid credentials",
+		})
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid credentials"})
 		return
 	}
 
 	if err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(req.Password)); err != nil {
 		if decision := loginRateLimiter.recordFailure(clientIP); decision.limited {
+			audit.LogRequest(c, audit.Entry{
+				Action:     "login_failed",
+				Actor:      req.Username,
+				Status:     audit.StatusFailed,
+				TargetType: "auth",
+				Detail:     "Login rejected due to rate limit after invalid password",
+			})
 			c.Header("Retry-After", strconv.Itoa(decision.retryAfter))
 			c.JSON(http.StatusTooManyRequests, gin.H{"error": "too many failed login attempts"})
 			return
 		}
+		audit.LogRequest(c, audit.Entry{
+			Action:     "login_failed",
+			Actor:      req.Username,
+			Status:     audit.StatusFailed,
+			TargetType: "auth",
+			Detail:     "Invalid credentials",
+		})
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid credentials"})
 		return
 	}
@@ -160,11 +189,21 @@ func Login(c *gin.Context) {
 		UserID:    user.ID,
 		ExpiresAt: time.Now().Add(30 * 24 * time.Hour),
 	}
-	dbcore.DB().Create(&session)
+	if err := dbcore.DB().Create(&session).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to persist session"})
+		return
+	}
 
 	secureCookie := isHTTPSRequest(c)
 	c.SetSameSite(http.SameSiteLaxMode)
 	c.SetCookie("session", token, 30*24*3600, "/", "", secureCookie, true)
+	audit.LogRequest(c, audit.Entry{
+		Action:     "login_success",
+		Actor:      user.Username,
+		Status:     audit.StatusSuccess,
+		TargetType: "auth",
+		Detail:     "User logged in",
+	})
 	c.JSON(http.StatusOK, gin.H{
 		"token":                            token,
 		"username":                         user.Username,
@@ -180,12 +219,27 @@ func Logout(c *gin.Context) {
 			token = strings.TrimPrefix(auth, "Bearer ")
 		}
 	}
+
+	username := ""
 	if token != "" {
+		var session models.Session
+		if err := dbcore.DB().Where("token = ?", token).First(&session).Error; err == nil {
+			username = audit.UsernameByID(session.UserID)
+		}
 		dbcore.DB().Where("token = ?", token).Delete(&models.Session{})
 	}
 	secureCookie := isHTTPSRequest(c)
 	c.SetSameSite(http.SameSiteLaxMode)
 	c.SetCookie("session", "", -1, "/", "", secureCookie, true)
+	if username != "" {
+		audit.LogRequest(c, audit.Entry{
+			Action:     "logout",
+			Actor:      username,
+			Status:     audit.StatusSuccess,
+			TargetType: "auth",
+			Detail:     "User logged out",
+		})
+	}
 	c.JSON(http.StatusOK, gin.H{"message": "logged out"})
 }
 
@@ -258,6 +312,13 @@ func ChangePassword(c *gin.Context) {
 	}
 
 	if err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(req.CurrentPassword)); err != nil {
+		audit.LogRequest(c, audit.Entry{
+			Action:     "password_change_failed",
+			Actor:      user.Username,
+			Status:     audit.StatusFailed,
+			TargetType: "auth",
+			Detail:     "Current password is incorrect",
+		})
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "current password is incorrect"})
 		return
 	}
@@ -273,6 +334,13 @@ func ChangePassword(c *gin.Context) {
 		return
 	}
 
+	audit.LogRequest(c, audit.Entry{
+		Action:     "password_changed",
+		Actor:      user.Username,
+		Status:     audit.StatusSuccess,
+		TargetType: "auth",
+		Detail:     "User changed password",
+	})
 	c.JSON(http.StatusOK, gin.H{"message": "password changed"})
 }
 

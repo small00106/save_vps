@@ -1,19 +1,18 @@
 # Stage 1: Build frontend
 FROM node:22-alpine AS frontend
-WORKDIR /web
-COPY cloudnest-web/package*.json ./
-RUN npm ci
-COPY cloudnest-web/ ./
-RUN npm run build
+RUN apk add --no-cache bash
+WORKDIR /src
+COPY scripts/ ./scripts/
+COPY cloudnest-web/ ./cloudnest-web/
+RUN chmod +x ./scripts/build-assets.sh && ./scripts/build-assets.sh frontend --output /out/dist
 
 # Stage 2: Cross-compile agent binaries
 FROM golang:1.24-alpine AS agent-builder
-WORKDIR /build
-COPY cloudnest-agent/go.mod cloudnest-agent/go.sum ./
-RUN go mod download
-COPY cloudnest-agent/ ./
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o cloudnest-agent-linux-amd64 . && \
-    CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -o cloudnest-agent-linux-arm64 .
+RUN apk add --no-cache bash
+WORKDIR /src
+COPY scripts/ ./scripts/
+COPY cloudnest-agent/ ./cloudnest-agent/
+RUN chmod +x ./scripts/build-assets.sh && ./scripts/build-assets.sh agent --output /out
 
 # Stage 3: Build master (with embedded frontend)
 FROM golang:1.24-alpine AS master-builder
@@ -23,7 +22,7 @@ COPY cloudnest/go.mod cloudnest/go.sum ./
 RUN go mod download
 COPY cloudnest/ ./
 # Copy frontend build into embed directory
-COPY --from=frontend /web/dist/ ./public/dist/
+COPY --from=frontend /out/dist/ ./public/dist/
 RUN CGO_ENABLED=1 go build -o cloudnest .
 
 # Stage 4: Final image
@@ -36,13 +35,16 @@ COPY --from=master-builder /build/cloudnest .
 
 # Copy agent binaries for download
 RUN mkdir -p /app/data/binaries
-COPY --from=agent-builder /build/cloudnest-agent-linux-amd64 /app/data/binaries/
-COPY --from=agent-builder /build/cloudnest-agent-linux-arm64 /app/data/binaries/
+COPY --from=agent-builder /out/cloudnest-agent-linux-amd64 /app/data/binaries/
+COPY --from=agent-builder /out/cloudnest-agent-linux-arm64 /app/data/binaries/
 
 ENV GIN_MODE=release
 ENV CLOUDNEST_LISTEN=0.0.0.0:8800
+ENV CLOUDNEST_DB_TYPE=sqlite
+ENV CLOUDNEST_DB_DSN=/app/data/cloudnest.db
 
 EXPOSE 8800
 VOLUME /app/data
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=5 CMD wget -q -O - http://127.0.0.1:8800/healthz >/dev/null 2>&1 || exit 1
 
 CMD ["/app/cloudnest", "server"]

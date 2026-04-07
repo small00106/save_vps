@@ -53,15 +53,6 @@ cc_for_arch() {
     esac
 }
 
-build_agent() {
-    local arch="$1"
-    local output="$2"
-    (
-        cd "${ROOT_DIR}/cloudnest-agent"
-        CGO_ENABLED=0 GOOS=linux GOARCH="$arch" go build -trimpath -o "$output" .
-    )
-}
-
 build_master() {
     local arch="$1"
     local output="$2"
@@ -95,6 +86,7 @@ require_command npm
 require_command tar
 require_command sha256sum
 require_command gcc
+require_command bash
 
 if [[ "$(uname -s | tr '[:upper:]' '[:lower:]')" != "linux" ]]; then
     echo "Error: release/build-release.sh currently supports Linux only" >&2
@@ -117,11 +109,7 @@ rm -rf "$DIST_DIR"
 mkdir -p "$DIST_DIR"
 
 echo "==> Building frontend"
-(
-    cd "${ROOT_DIR}/cloudnest-web"
-    npm ci
-    npm run build
-)
+bash "${ROOT_DIR}/scripts/build-assets.sh" frontend --output "${WORK_DIR}/frontend-dist"
 
 MASTER_SRC_DIR="${WORK_DIR}/cloudnest"
 AGENT_DIST_DIR="${WORK_DIR}/agent"
@@ -132,11 +120,10 @@ echo "==> Preparing master source tree"
 cp -a "${ROOT_DIR}/cloudnest/." "${MASTER_SRC_DIR}/"
 rm -rf "${MASTER_SRC_DIR}/public/dist"
 mkdir -p "${MASTER_SRC_DIR}/public/dist"
-cp -a "${ROOT_DIR}/cloudnest-web/dist/." "${MASTER_SRC_DIR}/public/dist/"
+cp -a "${WORK_DIR}/frontend-dist/." "${MASTER_SRC_DIR}/public/dist/"
 
 echo "==> Building agent binaries"
-build_agent amd64 "${AGENT_DIST_DIR}/cloudnest-agent-linux-amd64"
-build_agent arm64 "${AGENT_DIST_DIR}/cloudnest-agent-linux-arm64"
+bash "${ROOT_DIR}/scripts/build-assets.sh" agent --output "${AGENT_DIST_DIR}"
 install -m 0755 "${AGENT_DIST_DIR}/cloudnest-agent-linux-amd64" "${DIST_DIR}/cloudnest-agent-linux-amd64"
 install -m 0755 "${AGENT_DIST_DIR}/cloudnest-agent-linux-arm64" "${DIST_DIR}/cloudnest-agent-linux-arm64"
 

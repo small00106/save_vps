@@ -1,0 +1,4 @@
+c47cd7c0eb12dad5f87a91b993eb6bae08f8e554cd4e2e4b9abf345861ab1512  cloudnest-master-linux-amd64.tar.gz
+66ab9c5ef26ab3ab3d681400f045156bcd43a6d0bf6dd5a2009a6881bfe1c250  cloudnest-master-linux-arm64.tar.gz
+7ddc8ed858893cb6b6704d2405013df14a70401d917db0d0730d7fcd73e7265c  cloudnest-agent-linux-amd64
+7459443f634a843879070472ed324cf1c8006ca283592b09f9f299c90dba31a2  cloudnest-agent-linux-arm64

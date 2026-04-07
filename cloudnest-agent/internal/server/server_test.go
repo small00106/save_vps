@@ -379,6 +379,7 @@ func TestValidateSignedURLRejectsTamperedUploadQuery(t *testing.T) {
 func TestLoadSigningSecretFromEnvRejectsMissingValue(t *testing.T) {
 	prevSecret := signingSecret
 	signingSecret = ""
+	t.Setenv(signingSecretFileEnvKey, "")
 	t.Setenv("CLOUDNEST_SIGNING_SECRET", "")
 	defer func() { signingSecret = prevSecret }()
 
@@ -387,9 +388,10 @@ func TestLoadSigningSecretFromEnvRejectsMissingValue(t *testing.T) {
 	}
 }
 
-func TestLoadSigningSecretFromEnvRejectsLegacyDefault(t *testing.T) {
+func TestLoadSigningSecretFromEnvRejectsLegacyDefaultFromEnv(t *testing.T) {
 	prevSecret := signingSecret
 	signingSecret = ""
+	t.Setenv(signingSecretFileEnvKey, "")
 	t.Setenv("CLOUDNEST_SIGNING_SECRET", "cloudnest-default-secret")
 	defer func() { signingSecret = prevSecret }()
 
@@ -398,9 +400,27 @@ func TestLoadSigningSecretFromEnvRejectsLegacyDefault(t *testing.T) {
 	}
 }
 
+func TestLoadSigningSecretFromEnvRejectsLegacyDefaultFromFile(t *testing.T) {
+	prevSecret := signingSecret
+	signingSecret = ""
+	defer func() { signingSecret = prevSecret }()
+
+	secretFile := filepath.Join(t.TempDir(), "signing_secret")
+	if err := os.WriteFile(secretFile, []byte("cloudnest-default-secret"), 0600); err != nil {
+		t.Fatalf("write signing secret file: %v", err)
+	}
+	t.Setenv(signingSecretFileEnvKey, secretFile)
+	t.Setenv(signingSecretEnvKey, "")
+
+	if err := LoadSigningSecretFromEnv(); err == nil {
+		t.Fatal("expected legacy default signing secret from file to be rejected")
+	}
+}
+
 func TestLoadSigningSecretFromEnvUsesConfiguredValue(t *testing.T) {
 	prevSecret := signingSecret
 	signingSecret = ""
+	t.Setenv(signingSecretFileEnvKey, "")
 	t.Setenv("CLOUDNEST_SIGNING_SECRET", "agent-secret")
 	defer func() { signingSecret = prevSecret }()
 
@@ -409,6 +429,26 @@ func TestLoadSigningSecretFromEnvUsesConfiguredValue(t *testing.T) {
 	}
 	if signingSecret != "agent-secret" {
 		t.Fatalf("expected signing secret to be updated, got %q", signingSecret)
+	}
+}
+
+func TestLoadSigningSecretFromEnvUsesSecretFileWhenProvided(t *testing.T) {
+	prevSecret := signingSecret
+	signingSecret = ""
+	defer func() { signingSecret = prevSecret }()
+
+	secretFile := filepath.Join(t.TempDir(), "signing_secret")
+	if err := os.WriteFile(secretFile, []byte("file-secret"), 0600); err != nil {
+		t.Fatalf("write signing secret file: %v", err)
+	}
+	t.Setenv(signingSecretFileEnvKey, secretFile)
+	t.Setenv(signingSecretEnvKey, "env-secret")
+
+	if err := LoadSigningSecretFromEnv(); err != nil {
+		t.Fatalf("load signing secret: %v", err)
+	}
+	if signingSecret != "file-secret" {
+		t.Fatalf("expected signing secret from file, got %q", signingSecret)
 	}
 }
 

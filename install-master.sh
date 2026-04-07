@@ -104,6 +104,7 @@ require_root
 require_command curl
 require_command tar
 require_command systemctl
+require_command sha256sum
 
 OS="$(uname -s | tr '[:upper:]' '[:lower:]')"
 ARCH="$(uname -m)"
@@ -126,11 +127,38 @@ ENV_DIR="$(dirname "$ENV_FILE")"
 ASSET_NAME="cloudnest-master-linux-${ARCH}.tar.gz"
 TMP_DIR="$(mktemp -d)"
 TAR_PATH="${TMP_DIR}/${ASSET_NAME}"
+CHECKSUMS_PATH="${TMP_DIR}/checksums.txt"
+ASSET_CHECKSUM_PATH="${TMP_DIR}/${ASSET_NAME}.sha256"
 EXTRACT_DIR="${TMP_DIR}/extract"
 DOWNLOAD_URL="https://github.com/${REPO}/releases/latest/download/${ASSET_NAME}"
+CHECKSUMS_URL="https://github.com/${REPO}/releases/latest/download/checksums.txt"
 if [[ "$VERSION" != "latest" ]]; then
     DOWNLOAD_URL="https://github.com/${REPO}/releases/download/${VERSION}/${ASSET_NAME}"
+    CHECKSUMS_URL="https://github.com/${REPO}/releases/download/${VERSION}/checksums.txt"
 fi
+
+extract_listen_port() {
+    local port
+    port="${LISTEN_ADDR##*:}"
+    case "$port" in
+        ''|*[!0-9]*)
+            echo "Error: unable to derive port from --listen ${LISTEN_ADDR}" >&2
+            exit 1
+            ;;
+    esac
+    printf '%s\n' "$port"
+}
+
+wait_for_health() {
+    local url="$1"
+    for _ in $(seq 1 30); do
+        if curl -fsS "$url" >/dev/null; then
+            return 0
+        fi
+        sleep 1
+    done
+    return 1
+}
 
 cleanup() {
     rm -rf "$TMP_DIR"
@@ -153,6 +181,14 @@ fi
 
 echo "Downloading ${DOWNLOAD_URL}"
 curl -fsSL -o "$TAR_PATH" "$DOWNLOAD_URL"
+curl -fsSL -o "$CHECKSUMS_PATH" "$CHECKSUMS_URL"
+
+if ! grep "  ${ASSET_NAME}\$" "$CHECKSUMS_PATH" >"$ASSET_CHECKSUM_PATH"; then
+    echo "Error: checksum entry for ${ASSET_NAME} not found" >&2
+    exit 1
+fi
+
+(cd "$TMP_DIR" && sha256sum -c "${ASSET_NAME}.sha256")
 
 mkdir -p "$EXTRACT_DIR"
 tar -xzf "$TAR_PATH" -C "$EXTRACT_DIR"
@@ -195,6 +231,13 @@ EOF
 systemctl daemon-reload
 systemctl enable "$SERVICE_NAME"
 systemctl restart "$SERVICE_NAME"
+
+HEALTH_URL="http://127.0.0.1:$(extract_listen_port)/healthz"
+if ! wait_for_health "$HEALTH_URL"; then
+    echo "Error: CloudNest did not become healthy at ${HEALTH_URL}" >&2
+    systemctl status "$SERVICE_NAME" --no-pager || true
+    exit 1
+fi
 
 echo
 echo "=== Installation Complete ==="

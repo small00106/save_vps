@@ -2,12 +2,14 @@ package agent
 
 import (
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	stdpath "path"
 	"strings"
 	"time"
 
+	"github.com/cloudnest/cloudnest/internal/audit"
 	"github.com/cloudnest/cloudnest/internal/cache"
 	"github.com/cloudnest/cloudnest/internal/database/dbcore"
 	"github.com/cloudnest/cloudnest/internal/database/models"
@@ -410,10 +412,32 @@ func handleCommandResult(uuid string, params json.RawMessage) {
 		return
 	}
 
-	dbcore.DB().Model(&models.CommandTask{}).Where("id = ?", data.TaskID).Updates(map[string]interface{}{
+	updateResult := dbcore.DB().Model(&models.CommandTask{}).Where("id = ? AND node_uuid = ?", data.TaskID, uuid).Updates(map[string]interface{}{
 		"output":    data.Output,
 		"exit_code": data.ExitCode,
 		"status":    "done",
+	})
+	if updateResult.Error != nil {
+		log.Printf("[CommandResult] Failed to update task %d for node %s: %v", data.TaskID, uuid, updateResult.Error)
+		return
+	}
+	if updateResult.RowsAffected == 0 {
+		log.Printf("[CommandResult] Ignored result for task %d from node %s (task not found or node mismatch)", data.TaskID, uuid)
+		return
+	}
+
+	status := audit.StatusSuccess
+	if data.ExitCode != 0 {
+		status = audit.StatusFailed
+	}
+	audit.Log(audit.Entry{
+		Action:     "command_exec_completed",
+		Actor:      audit.ActorSystem,
+		Status:     status,
+		TargetType: "command_task",
+		TargetID:   audit.TargetIDFromUint(data.TaskID),
+		NodeUUID:   uuid,
+		Detail:     fmt.Sprintf("Remote command completed with exit code %d", data.ExitCode),
 	})
 }
 

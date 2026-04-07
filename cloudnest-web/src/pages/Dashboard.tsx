@@ -8,6 +8,7 @@ import { getNodes, getSettings, type Node, type Settings } from "../api/client";
 import { useWebSocket } from "../hooks/useWebSocket";
 import { useI18n } from "../i18n/useI18n";
 import { useCardGlow } from "../hooks/useMouseGlow";
+import { getNodeDisplayName, parseNodeTags } from "../utils/nodeDisplayName";
 
 function formatBytes(bytes: number, decimals = 1): string {
   if (!bytes || bytes === 0) return "0 B";
@@ -25,15 +26,6 @@ function formatUptime(seconds: number): string {
   const m = Math.floor((seconds % 3600) / 60);
   if (h > 0) return `${h}h ${m}m`;
   return `${m}m`;
-}
-
-function parseTags(tags: string): string[] {
-  try {
-    const arr = JSON.parse(tags);
-    return Array.isArray(arr) ? arr : [];
-  } catch {
-    return [];
-  }
 }
 
 function ProgressBar({ value, colorStart, colorEnd }: { value: number; colorStart: string; colorEnd: string }) {
@@ -199,7 +191,9 @@ export default function Dashboard() {
           const netOut = live?.metrics.net_out_speed ?? metric?.net_out_speed ?? 0;
           const uptime = live?.metrics.uptime ?? metric?.uptime ?? 0;
           const isOnline = node.status === "online";
-          const tags = parseTags(node.tags);
+          const tags = parseNodeTags(node.tags);
+          const displayName = getNodeDisplayName(node.hostname, node.tags);
+          const showHostname = displayName !== node.hostname;
 
           return (
             <div
@@ -212,7 +206,12 @@ export default function Dashboard() {
               {/* Header */}
               <div className="relative z-10 flex items-start justify-between mb-4">
                 <div className="min-w-0">
-                  <h3 className="truncate font-semibold text-text-primary text-lg">{node.hostname}</h3>
+                  <h3 className="truncate font-semibold text-text-primary text-lg">{displayName}</h3>
+                  {showHostname && (
+                    <div className="mt-1 truncate text-xs text-text-muted">
+                      {tx("主机名", "Hostname")}: {node.hostname}
+                    </div>
+                  )}
                   <div className="flex items-center gap-2 mt-1">
                     <span className="text-xs text-text-muted">{node.ip || node.region}</span>
                     <span className="flex items-center gap-1.5">

@@ -37,6 +37,12 @@ func initWebsocketFileTestDB(t *testing.T) {
 	if err := db.Exec("DELETE FROM files").Error; err != nil {
 		t.Fatalf("clear files: %v", err)
 	}
+	if err := db.Exec("DELETE FROM command_tasks").Error; err != nil {
+		t.Fatalf("clear command_tasks: %v", err)
+	}
+	if err := db.Exec("DELETE FROM audit_logs").Error; err != nil {
+		t.Fatalf("clear audit_logs: %v", err)
+	}
 	cache.Init()
 }
 
@@ -238,5 +244,144 @@ func TestHandleFileStoredMarksOtherReplicasLostAfterOverwrite(t *testing.T) {
 	}
 	if staleReplica.Status != "lost" {
 		t.Fatalf("expected stale replica to be marked lost, got %q", staleReplica.Status)
+	}
+}
+
+func TestHandleCommandResultWritesSuccessAuditLog(t *testing.T) {
+	initWebsocketFileTestDB(t)
+
+	task := models.CommandTask{
+		NodeUUID: "node-1",
+		Command:  "uptime",
+		Status:   "running",
+	}
+	if err := dbcore.DB().Create(&task).Error; err != nil {
+		t.Fatalf("create command task: %v", err)
+	}
+
+	params, err := json.Marshal(map[string]interface{}{
+		"task_id":   task.ID,
+		"output":    "ok",
+		"exit_code": 0,
+	})
+	if err != nil {
+		t.Fatalf("marshal params: %v", err)
+	}
+
+	handleCommandResult("node-1", params)
+
+	var updated models.CommandTask
+	if err := dbcore.DB().First(&updated, task.ID).Error; err != nil {
+		t.Fatalf("load command task: %v", err)
+	}
+	if updated.Status != "done" {
+		t.Fatalf("expected task status done, got %q", updated.Status)
+	}
+	if updated.ExitCode != 0 {
+		t.Fatalf("expected exit code 0, got %d", updated.ExitCode)
+	}
+
+	var auditLog models.AuditLog
+	if err := dbcore.DB().Order("id DESC").First(&auditLog).Error; err != nil {
+		t.Fatalf("load audit log: %v", err)
+	}
+	if auditLog.Action != "command_exec_completed" {
+		t.Fatalf("expected command_exec_completed action, got %q", auditLog.Action)
+	}
+	if auditLog.Actor != "system" {
+		t.Fatalf("expected actor system, got %q", auditLog.Actor)
+	}
+	if auditLog.Status != "success" {
+		t.Fatalf("expected success status, got %q", auditLog.Status)
+	}
+	if auditLog.TargetType != "command_task" {
+		t.Fatalf("expected command_task target type, got %q", auditLog.TargetType)
+	}
+	if auditLog.TargetID != fmt.Sprintf("%d", task.ID) {
+		t.Fatalf("expected target_id %d, got %q", task.ID, auditLog.TargetID)
+	}
+	if auditLog.NodeUUID != "node-1" {
+		t.Fatalf("expected node_uuid node-1, got %q", auditLog.NodeUUID)
+	}
+}
+
+func TestHandleCommandResultWritesFailedAuditLogForNonZeroExitCode(t *testing.T) {
+	initWebsocketFileTestDB(t)
+
+	task := models.CommandTask{
+		NodeUUID: "node-1",
+		Command:  "uptime",
+		Status:   "running",
+	}
+	if err := dbcore.DB().Create(&task).Error; err != nil {
+		t.Fatalf("create command task: %v", err)
+	}
+
+	params, err := json.Marshal(map[string]interface{}{
+		"task_id":   task.ID,
+		"output":    "boom",
+		"exit_code": 17,
+	})
+	if err != nil {
+		t.Fatalf("marshal params: %v", err)
+	}
+
+	handleCommandResult("node-1", params)
+
+	var auditLog models.AuditLog
+	if err := dbcore.DB().Order("id DESC").First(&auditLog).Error; err != nil {
+		t.Fatalf("load audit log: %v", err)
+	}
+	if auditLog.Action != "command_exec_completed" {
+		t.Fatalf("expected command_exec_completed action, got %q", auditLog.Action)
+	}
+	if auditLog.Status != "failed" {
+		t.Fatalf("expected failed status, got %q", auditLog.Status)
+	}
+}
+
+func TestHandleCommandResultIgnoresMismatchedNode(t *testing.T) {
+	initWebsocketFileTestDB(t)
+
+	task := models.CommandTask{
+		NodeUUID: "node-2",
+		Command:  "uptime",
+		Status:   "running",
+	}
+	if err := dbcore.DB().Create(&task).Error; err != nil {
+		t.Fatalf("create command task: %v", err)
+	}
+
+	params, err := json.Marshal(map[string]interface{}{
+		"task_id":   task.ID,
+		"output":    "should-not-apply",
+		"exit_code": 0,
+	})
+	if err != nil {
+		t.Fatalf("marshal params: %v", err)
+	}
+
+	handleCommandResult("node-1", params)
+
+	var unchanged models.CommandTask
+	if err := dbcore.DB().First(&unchanged, task.ID).Error; err != nil {
+		t.Fatalf("load command task: %v", err)
+	}
+	if unchanged.Status != "running" {
+		t.Fatalf("expected task status to remain running, got %q", unchanged.Status)
+	}
+	if unchanged.Output != "" {
+		t.Fatalf("expected task output to remain empty, got %q", unchanged.Output)
+	}
+	if unchanged.ExitCode != 0 {
+		t.Fatalf("expected exit code to remain default 0, got %d", unchanged.ExitCode)
+	}
+
+	var auditCount int64
+	if err := dbcore.DB().Model(&models.AuditLog{}).Count(&auditCount).Error; err != nil {
+		t.Fatalf("count audit logs: %v", err)
+	}
+	if auditCount != 0 {
+		t.Fatalf("expected no audit logs for mismatched node result, got %d", auditCount)
 	}
 }

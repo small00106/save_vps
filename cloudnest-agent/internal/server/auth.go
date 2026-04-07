@@ -12,22 +12,46 @@ import (
 )
 
 const (
-	signingSecretEnvKey = "CLOUDNEST_SIGNING_SECRET"
-	legacySigningSecret = "cloudnest-default-secret"
+	signingSecretEnvKey     = "CLOUDNEST_SIGNING_SECRET"
+	signingSecretFileEnvKey = "CLOUDNEST_SIGNING_SECRET_FILE"
+	legacySigningSecret     = "cloudnest-default-secret"
 )
 
 var signingSecret string
 
 func LoadSigningSecretFromEnv() error {
-	secret := strings.TrimSpace(os.Getenv(signingSecretEnvKey))
-	switch {
-	case secret == "":
-		return fmt.Errorf("%s is required", signingSecretEnvKey)
-	case secret == legacySigningSecret:
-		return fmt.Errorf("%s cannot use legacy default value %q", signingSecretEnvKey, legacySigningSecret)
+	secret, err := resolveSigningSecret()
+	if err != nil {
+		return err
 	}
 	signingSecret = secret
 	return nil
+}
+
+func resolveSigningSecret() (string, error) {
+	if path := strings.TrimSpace(os.Getenv(signingSecretFileEnvKey)); path != "" {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return "", fmt.Errorf("failed to read %s from %q: %w", signingSecretFileEnvKey, path, err)
+		}
+		secret := strings.TrimSpace(string(data))
+		switch {
+		case secret == "":
+			return "", fmt.Errorf("%s file %q is empty", signingSecretFileEnvKey, path)
+		case secret == legacySigningSecret:
+			return "", fmt.Errorf("%s cannot use legacy default value %q", signingSecretFileEnvKey, legacySigningSecret)
+		}
+		return secret, nil
+	}
+
+	secret := strings.TrimSpace(os.Getenv(signingSecretEnvKey))
+	switch {
+	case secret == "":
+		return "", fmt.Errorf("either %s or %s is required", signingSecretFileEnvKey, signingSecretEnvKey)
+	case secret == legacySigningSecret:
+		return "", fmt.Errorf("%s cannot use legacy default value %q", signingSecretEnvKey, legacySigningSecret)
+	}
+	return secret, nil
 }
 
 // validateSignature checks HMAC-SHA256 signature, same algorithm as master's transfer.signer.

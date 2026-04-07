@@ -16,9 +16,12 @@ func TestGenerateInstallScriptSetsSystemdHome(t *testing.T) {
 	requiredSnippets := []string{
 		`AGENT_HOME="$(getent passwd root | cut -d: -f6 2>/dev/null || true)"`,
 		`[ -n "$AGENT_HOME" ] || AGENT_HOME="/root"`,
+		`AGENT_ENV_FILE="${AGENT_ETC_DIR}/agent.env"`,
+		`SIGNING_SECRET_PATH="${AGENT_ETC_DIR}/signing_secret"`,
 		`HOME="$AGENT_HOME" "${INSTALL_DIR}/cloudnest-agent" register \`,
+		`--token-file "$REG_TOKEN_TMP_FILE" \`,
 		`WorkingDirectory=${AGENT_HOME}`,
-		`Environment=HOME=${AGENT_HOME}`,
+		`EnvironmentFile=${AGENT_ENV_FILE}`,
 	}
 
 	for _, snippet := range requiredSnippets {
@@ -37,6 +40,8 @@ func TestGenerateInstallScriptHandlesBinaryUpgrade(t *testing.T) {
 		`systemctl stop "$SERVICE_NAME" || true`,
 		`curl -sSLf -o "${TMP_BINARY}" "${MASTER_URL}/download/agent/${OS}/${ARCH}"`,
 		`mv "${TMP_BINARY}" "${INSTALL_DIR}/cloudnest-agent"`,
+		`--token|--secret)`,
+		`die "$1 is no longer supported for security reasons. Use --token-file/--secret-file or interactive input."`,
 		`systemctl restart "$SERVICE_NAME"`,
 	}
 
@@ -97,6 +102,25 @@ func TestServeAgentBinaryUsesExecutableDir(t *testing.T) {
 		t.Fatalf("expected 200, got %d: %s", recorder.Code, recorder.Body.String())
 	}
 	if body := recorder.Body.String(); body != string(expectedContent) {
+		t.Fatalf("unexpected body %q", body)
+	}
+}
+
+func TestHealthzReturnsOK(t *testing.T) {
+	t.Setenv("GIN_MODE", "release")
+	gin.SetMode(gin.ReleaseMode)
+
+	router := gin.New()
+	router.GET("/healthz", healthz)
+
+	req := httptest.NewRequest("GET", "/healthz", nil)
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, req)
+
+	if recorder.Code != 200 {
+		t.Fatalf("expected 200, got %d", recorder.Code)
+	}
+	if body := recorder.Body.String(); !strings.Contains(body, `"status":"ok"`) {
 		t.Fatalf("unexpected body %q", body)
 	}
 }

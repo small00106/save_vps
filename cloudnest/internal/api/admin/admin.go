@@ -3,7 +3,10 @@ package admin
 import (
 	"fmt"
 	"net/http"
+	"slices"
+	"strconv"
 
+	"github.com/cloudnest/cloudnest/internal/audit"
 	"github.com/cloudnest/cloudnest/internal/database/dbcore"
 	"github.com/cloudnest/cloudnest/internal/database/models"
 	"github.com/gin-gonic/gin"
@@ -11,8 +14,26 @@ import (
 
 // GetAuditLogs handles GET /api/admin/audit
 func GetAuditLogs(c *gin.Context) {
+	limit := 200
+	if rawLimit := c.Query("limit"); rawLimit != "" {
+		if parsed, err := strconv.Atoi(rawLimit); err == nil && parsed > 0 {
+			limit = parsed
+		}
+	}
+	if limit > 500 {
+		limit = 500
+	}
+
+	query := dbcore.DB().Model(&models.AuditLog{})
+	if action := c.Query("action"); action != "" {
+		query = query.Where("action = ?", action)
+	}
+	if status := c.Query("status"); status != "" {
+		query = query.Where("status = ?", status)
+	}
+
 	var logs []models.AuditLog
-	dbcore.DB().Order("created_at DESC").Limit(200).Find(&logs)
+	query.Order("created_at DESC").Limit(limit).Find(&logs)
 	c.JSON(http.StatusOK, logs)
 }
 
@@ -46,10 +67,18 @@ func UpdateSettings(c *gin.Context) {
 		dbcore.DB().Where("key = ?", key).Assign(models.Setting{Key: key, Value: toString(value)}).FirstOrCreate(&models.Setting{})
 	}
 
-	dbcore.DB().Create(&models.AuditLog{
-		Action: "settings_updated",
-		Detail: "System settings updated",
-		IP:     c.ClientIP(),
+	keys := make([]string, 0, len(req))
+	for key := range req {
+		keys = append(keys, key)
+	}
+	slices.Sort(keys)
+
+	audit.LogRequest(c, audit.Entry{
+		Action:     "settings_updated",
+		Actor:      audit.UsernameFromContext(c),
+		Status:     audit.StatusSuccess,
+		TargetType: "settings",
+		Detail:     fmt.Sprintf("Updated settings: %v", keys),
 	})
 
 	c.JSON(http.StatusOK, gin.H{"message": "settings updated"})

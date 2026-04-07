@@ -2,13 +2,22 @@ version: "3.8"
 
 services:
   cloudnest:
-    build:
-      context: .
-      dockerfile: Dockerfile
+    image: ghcr.io/small00106/save_vps:${CLOUDNEST_IMAGE_TAG:-latest}
+    environment:
+      CLOUDNEST_LISTEN: 0.0.0.0:8800
+      CLOUDNEST_DB_TYPE: ${CLOUDNEST_DB_TYPE:-sqlite}
+      CLOUDNEST_DB_DSN: ${CLOUDNEST_DB_DSN:-/app/data/cloudnest.db}
+      CLOUDNEST_PUBLIC_BASE_URL: ${CLOUDNEST_PUBLIC_BASE_URL:-}
     ports:
-      - "8800:8800"
+      - "${CLOUDNEST_PORT:-8800}:8800"
     volumes:
       - cloudnest-data:/app/data
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O - http://127.0.0.1:8800/healthz >/dev/null 2>&1 || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
     restart: unless-stopped
 
 volumes:

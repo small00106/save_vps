@@ -1,0 +1,8 @@
+version: "3.8"
+
+services:
+  cloudnest:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: cloudnest-local:${CLOUDNEST_IMAGE_TAG:-dev}

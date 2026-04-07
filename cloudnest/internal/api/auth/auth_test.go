@@ -43,6 +43,9 @@ func initAuthTestDB(t *testing.T) {
 	if err := db.Exec("DELETE FROM settings").Error; err != nil {
 		t.Fatalf("clear settings: %v", err)
 	}
+	if err := db.Exec("DELETE FROM audit_logs").Error; err != nil {
+		t.Fatalf("clear audit_logs: %v", err)
+	}
 
 	loginRateLimiter = newLoginRateLimiter(defaultLoginFailureLimit, defaultLoginFailureWindow, time.Now)
 }
@@ -99,6 +102,20 @@ func TestChangePasswordUpdatesPasswordHash(t *testing.T) {
 	if err := bcrypt.CompareHashAndPassword([]byte(updated.PasswordHash), []byte("old-password")); err == nil {
 		t.Fatalf("expected old password to be rejected")
 	}
+
+	var auditLog models.AuditLog
+	if err := dbcore.DB().Order("id DESC").First(&auditLog).Error; err != nil {
+		t.Fatalf("load audit log: %v", err)
+	}
+	if auditLog.Action != "password_changed" {
+		t.Fatalf("expected password_changed audit action, got %q", auditLog.Action)
+	}
+	if auditLog.Actor != "admin" {
+		t.Fatalf("expected actor admin, got %q", auditLog.Actor)
+	}
+	if auditLog.Status != "success" {
+		t.Fatalf("expected success status, got %q", auditLog.Status)
+	}
 }
 
 func TestChangePasswordRejectsWrongCurrentPassword(t *testing.T) {
@@ -131,6 +148,20 @@ func TestChangePasswordRejectsWrongCurrentPassword(t *testing.T) {
 	}
 	if err := bcrypt.CompareHashAndPassword([]byte(unchanged.PasswordHash), []byte("old-password")); err != nil {
 		t.Fatalf("expected old password to remain valid: %v", err)
+	}
+
+	var auditLog models.AuditLog
+	if err := dbcore.DB().Order("id DESC").First(&auditLog).Error; err != nil {
+		t.Fatalf("load audit log: %v", err)
+	}
+	if auditLog.Action != "password_change_failed" {
+		t.Fatalf("expected password_change_failed audit action, got %q", auditLog.Action)
+	}
+	if auditLog.Actor != "admin" {
+		t.Fatalf("expected actor admin, got %q", auditLog.Actor)
+	}
+	if auditLog.Status != "failed" {
+		t.Fatalf("expected failed status, got %q", auditLog.Status)
 	}
 }
 
@@ -392,5 +423,105 @@ func TestMeDoesNotRequireDefaultPasswordNoticeForNonAdminUser(t *testing.T) {
 	}
 	if resp.DefaultPasswordNoticeRequired {
 		t.Fatalf("expected non-admin user to skip default password notice")
+	}
+}
+
+func TestLoginWritesAuditLogOnSuccess(t *testing.T) {
+	initAuthTestDB(t)
+	createAuthTestUser(t, "admin", "admin")
+
+	recorder := performLoginRequest(t, "203.0.113.10:1234", "admin", "admin")
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+
+	var auditLog models.AuditLog
+	if err := dbcore.DB().Order("id DESC").First(&auditLog).Error; err != nil {
+		t.Fatalf("load audit log: %v", err)
+	}
+	if auditLog.Action != "login_success" {
+		t.Fatalf("expected login_success action, got %q", auditLog.Action)
+	}
+	if auditLog.Actor != "admin" {
+		t.Fatalf("expected actor admin, got %q", auditLog.Actor)
+	}
+	if auditLog.Status != "success" {
+		t.Fatalf("expected success status, got %q", auditLog.Status)
+	}
+	if auditLog.TargetType != "auth" {
+		t.Fatalf("expected target_type auth, got %q", auditLog.TargetType)
+	}
+	if auditLog.IP != "203.0.113.10" {
+		t.Fatalf("expected client IP recorded, got %q", auditLog.IP)
+	}
+}
+
+func TestLoginWritesAuditLogOnFailure(t *testing.T) {
+	initAuthTestDB(t)
+	createAuthTestUser(t, "admin", "admin")
+
+	recorder := performLoginRequest(t, "203.0.113.11:2345", "admin", "wrong-password")
+	if recorder.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+
+	var auditLog models.AuditLog
+	if err := dbcore.DB().Order("id DESC").First(&auditLog).Error; err != nil {
+		t.Fatalf("load audit log: %v", err)
+	}
+	if auditLog.Action != "login_failed" {
+		t.Fatalf("expected login_failed action, got %q", auditLog.Action)
+	}
+	if auditLog.Actor != "admin" {
+		t.Fatalf("expected actor admin, got %q", auditLog.Actor)
+	}
+	if auditLog.Status != "failed" {
+		t.Fatalf("expected failed status, got %q", auditLog.Status)
+	}
+	if auditLog.IP != "203.0.113.11" {
+		t.Fatalf("expected client IP recorded, got %q", auditLog.IP)
+	}
+}
+
+func TestLogoutWritesAuditLog(t *testing.T) {
+	initAuthTestDB(t)
+	user := createAuthTestUser(t, "admin", "admin")
+
+	session := models.Session{
+		Token:     "logout-token",
+		UserID:    user.ID,
+		ExpiresAt: time.Now().Add(24 * time.Hour),
+	}
+	if err := dbcore.DB().Create(&session).Error; err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/api/auth/logout", nil)
+	c.Request.RemoteAddr = "203.0.113.12:3456"
+	c.Request.AddCookie(&http.Cookie{Name: "session", Value: session.Token})
+
+	Logout(c)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+
+	var auditLog models.AuditLog
+	if err := dbcore.DB().Order("id DESC").First(&auditLog).Error; err != nil {
+		t.Fatalf("load audit log: %v", err)
+	}
+	if auditLog.Action != "logout" {
+		t.Fatalf("expected logout action, got %q", auditLog.Action)
+	}
+	if auditLog.Actor != "admin" {
+		t.Fatalf("expected actor admin, got %q", auditLog.Actor)
+	}
+	if auditLog.Status != "success" {
+		t.Fatalf("expected success status, got %q", auditLog.Status)
+	}
+	if auditLog.IP != "203.0.113.12" {
+		t.Fatalf("expected client IP recorded, got %q", auditLog.IP)
 	}
 }
