@@ -39,3 +39,5 @@ release/dist/
 release/*.exe
 release/*.tar.gz
 release/checksums.txt
+.tmp-release-debug/
+.tmp-release-test/

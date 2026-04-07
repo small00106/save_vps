@@ -1,7 +1,0 @@
-2026/04/07 21:44:01 Using database config: dbType=sqlite dbDSN=/mnt/d/code/save/.tmp-release-debug/cloudnest3.db
-2026/04/07 21:44:01 Database initialized: sqlite
-2026/04/07 21:44:01 Database initialized
-2026/04/07 21:44:01 [Scheduler] All background tasks started
-2026/04/07 21:44:01 Background schedulers started
-2026/04/07 21:44:01 CloudNest master server starting on 127.0.0.1:18884
-[GIN] 2026/04/07 - 21:44:03 | 200 |    3.444192ms |       127.0.0.1 | GET      "/install.sh"
