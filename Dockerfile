@@ -1,5 +1,6 @@
 # Stage 1: Build frontend
-FROM node:22-alpine AS frontend
+ARG BUILDPLATFORM
+FROM --platform=$BUILDPLATFORM node:22-alpine AS frontend
 RUN apk add --no-cache bash
 WORKDIR /src
 COPY scripts/ ./scripts/
@@ -7,7 +8,7 @@ COPY cloudnest-web/ ./cloudnest-web/
 RUN chmod +x ./scripts/build-assets.sh && ./scripts/build-assets.sh frontend --output /out/dist
 
 # Stage 2: Cross-compile agent binaries
-FROM golang:1.24-alpine AS agent-builder
+FROM --platform=$BUILDPLATFORM golang:1.24-alpine AS agent-builder
 RUN apk add --no-cache bash
 WORKDIR /src
 COPY scripts/ ./scripts/
