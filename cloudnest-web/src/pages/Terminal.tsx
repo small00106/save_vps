@@ -1,11 +1,11 @@
 import { useEffect, useRef } from "react";
-import { useParams, useNavigate } from "react-router-dom";
+import { useNavigate, useParams } from "react-router-dom";
 import { ArrowLeft } from "lucide-react";
 import { Terminal as XTerminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
 import { useI18n } from "../i18n/useI18n";
-import { usePreferences, type Theme } from "../contexts/PreferencesContext";
+import { PageHeader, SectionCard, StatusBadge } from "../components/ui";
 
 interface TerminalControlMessage {
   type: "input" | "resize";
@@ -14,37 +14,20 @@ interface TerminalControlMessage {
   rows?: number;
 }
 
-function getTerminalTheme(theme: Theme) {
-  if (theme === "light") {
-    return {
-      background: "#f8fafc",
-      foreground: "#0f172a",
-      cursor: "#2563eb",
-      selectionBackground: "#bfdbfe",
-      black: "#334155",
-      red: "#dc2626",
-      green: "#16a34a",
-      yellow: "#d97706",
-      blue: "#2563eb",
-      magenta: "#9333ea",
-      cyan: "#0891b2",
-      white: "#0f172a",
-    };
-  }
-
+function getTerminalTheme() {
   return {
-    background: "#09090b",
-    foreground: "#fafafa",
-    cursor: "#3b82f6",
-    selectionBackground: "#3b82f640",
-    black: "#18181b",
-    red: "#ef4444",
-    green: "#22c55e",
-    yellow: "#f59e0b",
-    blue: "#3b82f6",
-    magenta: "#a855f7",
-    cyan: "#06b6d4",
-    white: "#fafafa",
+    background: "#0b1220",
+    foreground: "#e2e8f0",
+    cursor: "#38bdf8",
+    selectionBackground: "#0ea5e940",
+    black: "#111827",
+    red: "#f87171",
+    green: "#4ade80",
+    yellow: "#fbbf24",
+    blue: "#60a5fa",
+    magenta: "#c084fc",
+    cyan: "#22d3ee",
+    white: "#f8fafc",
   };
 }
 
@@ -52,7 +35,6 @@ export default function Terminal() {
   const { uuid } = useParams<{ uuid: string }>();
   const navigate = useNavigate();
   const { tx } = useI18n();
-  const { theme } = usePreferences();
   const termRef = useRef<HTMLDivElement>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const xtermRef = useRef<XTerminal | null>(null);
@@ -65,8 +47,8 @@ export default function Terminal() {
     const term = new XTerminal({
       cursorBlink: true,
       fontSize: 14,
-      fontFamily: "'JetBrains Mono', 'Fira Code', monospace",
-      theme: getTerminalTheme(theme),
+      fontFamily: "'JetBrains Mono', monospace",
+      theme: getTerminalTheme(),
     });
     const fitAddon = new FitAddon();
     term.loadAddon(fitAddon);
@@ -79,10 +61,7 @@ export default function Terminal() {
       if (
         nextSize.cols <= 0 ||
         nextSize.rows <= 0 ||
-        (
-          nextSize.cols === sizeRef.current.cols &&
-          nextSize.rows === sizeRef.current.rows
-        )
+        (nextSize.cols === sizeRef.current.cols && nextSize.rows === sizeRef.current.rows)
       ) {
         return;
       }
@@ -98,14 +77,10 @@ export default function Terminal() {
     };
 
     syncSize();
-
     term.writeln(`\x1b[36m${tx("正在连接节点...", "Connecting to agent...")}\x1b[0m`);
 
-    // Connect WebSocket
     const proto = location.protocol === "https:" ? "wss:" : "ws:";
-    const ws = new WebSocket(
-      `${proto}//${location.host}/api/ws/terminal/${uuid}?cols=${sizeRef.current.cols}&rows=${sizeRef.current.rows}`,
-    );
+    const ws = new WebSocket(`${proto}//${location.host}/api/ws/terminal/${uuid}?cols=${sizeRef.current.cols}&rows=${sizeRef.current.rows}`);
     wsRef.current = ws;
 
     ws.onopen = () => {
@@ -125,7 +100,6 @@ export default function Terminal() {
       term.writeln(`\r\n\x1b[31m${tx("连接错误。", "Connection error.")}\x1b[0m`);
     };
 
-    // Send terminal input to WebSocket
     term.onData((data) => {
       if (ws.readyState === WebSocket.OPEN) {
         const message: TerminalControlMessage = { type: "input", data };
@@ -133,7 +107,6 @@ export default function Terminal() {
       }
     });
 
-    // Handle resize
     const scheduleResize = () => {
       if (resizeTimerRef.current !== null) {
         window.clearTimeout(resizeTimerRef.current);
@@ -143,6 +116,7 @@ export default function Terminal() {
         syncSize(ws);
       }, 50);
     };
+
     const resizeObserver = new ResizeObserver(() => scheduleResize());
     resizeObserver.observe(termRef.current);
     const handleResize = () => scheduleResize();
@@ -158,29 +132,30 @@ export default function Terminal() {
       ws.close();
       term.dispose();
     };
-  }, [tx, uuid]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  useEffect(() => {
-    if (!xtermRef.current) return;
-    xtermRef.current.options.theme = getTerminalTheme(theme);
-  }, [theme]);
+  }, [tx, uuid]);
 
   return (
-    <div className="space-y-4 animate-[fadeIn_0.3s_ease-out]">
-      <div className="flex items-center gap-3">
-        <button
-          onClick={() => navigate(-1)}
-          className="rounded-lg p-1.5 transition-colors hover:bg-border/60"
-        >
-          <ArrowLeft className="h-4 w-4 text-text-secondary" />
-        </button>
-        <h1 className="text-xl font-bold text-text-primary">{tx("终端", "Terminal")}</h1>
-        <span className="font-mono text-xs text-text-muted">{uuid?.slice(0, 12)}...</span>
-      </div>
-      <div
-        ref={termRef}
-        className="h-[calc(100vh-12rem)] rounded-xl border border-border bg-card p-2"
+    <div className="space-y-6">
+      <PageHeader
+        eyebrow={tx("远程操作", "Remote Operations")}
+        title={tx("终端", "Terminal")}
+        description={tx("终端容器在全站浅色主题中保留独立深色工作区，避免影响长时间命令阅读。", "The terminal keeps an isolated dark workspace within the lighter application shell for long-running command readability.")}
+        actions={
+          <>
+            <StatusBadge tone="primary" label={uuid ? `${uuid.slice(0, 12)}...` : tx("未知节点", "Unknown node")} />
+            <button type="button" onClick={() => navigate(-1)} className="inline-flex items-center gap-2 rounded-2xl border border-border bg-surface px-4 py-2.5 text-sm font-medium text-text-primary transition-colors hover:border-border-hover hover:bg-card">
+              <ArrowLeft className="h-4 w-4" />
+              {tx("返回", "Back")}
+            </button>
+          </>
+        }
       />
+
+      <SectionCard title={tx("终端会话", "Terminal Session")} description={tx("键盘输入将直接转发到节点 shell。", "Keyboard input is forwarded directly to the node shell.")}> 
+        <div className="rounded-[28px] border border-slate-900 bg-[#0b1220] p-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]">
+          <div ref={termRef} className="h-[calc(100vh-18rem)] min-h-[420px] rounded-[20px] bg-[#0b1220]" />
+        </div>
+      </SectionCard>
     </div>
   );
 }

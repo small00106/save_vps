@@ -1,20 +1,35 @@
 import { useEffect, useState } from "react";
 import {
-  Loader2, Plus, X, Trash2, Bell, Send, Globe, Mail, Pencil,
+  Bell,
+  Globe,
+  Loader2,
+  Mail,
+  Pencil,
+  Plus,
+  Send,
+  Trash2,
+  X,
 } from "lucide-react";
 import {
-  getAlertRules, createAlertRule, updateAlertRule, deleteAlertRule,
-  getAlertChannels, createAlertChannel, updateAlertChannel,
-  type AlertRule, type AlertChannel,
+  createAlertChannel,
+  createAlertRule,
+  deleteAlertRule,
+  getAlertChannels,
+  getAlertRules,
+  updateAlertChannel,
+  updateAlertRule,
+  type AlertChannel,
+  type AlertRule,
 } from "../api/client";
 import { useI18n } from "../i18n/useI18n";
+import { EmptyState, PageHeader, SectionCard, SelectField, StatusBadge } from "../components/ui";
 
-const CHANNEL_TYPE_STYLES: Record<string, { bg: string; text: string; icon: typeof Send }> = {
-  telegram: { bg: "bg-blue-500/10", text: "text-[#3b82f6]", icon: Send },
-  webhook: { bg: "bg-zinc-500/10", text: "text-[#a1a1aa]", icon: Globe },
-  email: { bg: "bg-amber-500/10", text: "text-[#f59e0b]", icon: Mail },
-  bark: { bg: "bg-green-500/10", text: "text-[#22c55e]", icon: Bell },
-  serverchan: { bg: "bg-purple-500/10", text: "text-[#a855f7]", icon: Send },
+const CHANNEL_TYPE_STYLES: Record<string, { tone: string; icon: typeof Send }> = {
+  telegram: { tone: "text-sky-600 dark:text-sky-300", icon: Send },
+  webhook: { tone: "text-slate-600 dark:text-slate-300", icon: Globe },
+  email: { tone: "text-amber-600 dark:text-amber-300", icon: Mail },
+  bark: { tone: "text-emerald-600 dark:text-emerald-300", icon: Bell },
+  serverchan: { tone: "text-violet-600 dark:text-violet-300", icon: Send },
 };
 
 const METRICS = ["cpu", "mem", "disk", "offline"];
@@ -28,7 +43,6 @@ export default function Alerts() {
   const [showRuleForm, setShowRuleForm] = useState(false);
   const [showChannelForm, setShowChannelForm] = useState(false);
 
-  // Rule form
   const [ruleName, setRuleName] = useState("");
   const [ruleNodeUuid, setRuleNodeUuid] = useState("");
   const [ruleMetric, setRuleMetric] = useState("cpu");
@@ -38,7 +52,6 @@ export default function Alerts() {
   const [ruleChannelId, setRuleChannelId] = useState(0);
   const [ruleSubmitting, setRuleSubmitting] = useState(false);
 
-  // Channel form
   const [channelName, setChannelName] = useState("");
   const [channelType, setChannelType] = useState<"webhook" | "email" | "telegram" | "bark" | "serverchan">("webhook");
   const [channelConfigUrl, setChannelConfigUrl] = useState("");
@@ -59,9 +72,9 @@ export default function Alerts() {
 
   useEffect(() => {
     Promise.all([getAlertRules(), getAlertChannels()])
-      .then(([r, c]) => {
-        setRules(r);
-        setChannels(c);
+      .then(([ruleData, channelData]) => {
+        setRules(ruleData);
+        setChannels(channelData);
       })
       .catch(() => {})
       .finally(() => setLoading(false));
@@ -85,27 +98,26 @@ export default function Alerts() {
       setShowRuleForm(false);
       setRuleName("");
       setRuleNodeUuid("");
-    } catch (err) {
-      void err;
+    } finally {
+      setRuleSubmitting(false);
     }
-    setRuleSubmitting(false);
   };
 
   const handleToggleRule = async (rule: AlertRule) => {
     try {
       const updated = await updateAlertRule(rule.id, { enabled: !rule.enabled });
-      setRules((prev) => prev.map((r) => (r.id === rule.id ? updated : r)));
-    } catch (err) {
-      void err;
+      setRules((prev) => prev.map((item) => (item.id === rule.id ? updated : item)));
+    } catch {
+      // ignore
     }
   };
 
   const handleDeleteRule = async (id: number) => {
     try {
       await deleteAlertRule(id);
-      setRules((prev) => prev.filter((r) => r.id !== id));
-    } catch (err) {
-      void err;
+      setRules((prev) => prev.filter((rule) => rule.id !== id));
+    } catch {
+      // ignore
     }
   };
 
@@ -124,9 +136,12 @@ export default function Alerts() {
         break;
       case "email":
         configObj = {
-          smtp_host: channelConfigSmtpHost, smtp_port: channelConfigSmtpPort,
-          username: channelConfigSmtpUser, password: channelConfigSmtpPass,
-          from: channelConfigFrom, to: channelConfigTo,
+          smtp_host: channelConfigSmtpHost,
+          smtp_port: channelConfigSmtpPort,
+          username: channelConfigSmtpUser,
+          password: channelConfigSmtpPass,
+          from: channelConfigFrom,
+          to: channelConfigTo,
         };
         break;
       case "serverchan":
@@ -135,21 +150,20 @@ export default function Alerts() {
     }
 
     try {
-      const ch = await createAlertChannel({
+      const channel = await createAlertChannel({
         name: channelName,
         type: channelType,
         config: JSON.stringify(configObj),
       });
-      setChannels((prev) => [...prev, ch]);
+      setChannels((prev) => [...prev, channel]);
       setShowChannelForm(false);
       setChannelName("");
       setChannelConfigUrl("");
       setChannelConfigBotToken("");
       setChannelConfigChatId("");
-    } catch (err) {
-      void err;
+    } finally {
+      setChannelSubmitting(false);
     }
-    setChannelSubmitting(false);
   };
 
   const openEditChannel = (channel: AlertChannel) => {
@@ -176,342 +190,245 @@ export default function Alerts() {
         name: editChannelName.trim(),
         config: editChannelConfig,
       });
-      setChannels((prev) => prev.map((c) => (c.id === updated.id ? updated : c)));
+      setChannels((prev) => prev.map((channel) => (channel.id === updated.id ? updated : channel)));
       setEditingChannelId(null);
       setEditChannelName("");
       setEditChannelConfig("");
-    } catch {
-      // ignore
     } finally {
       setChannelUpdating(false);
     }
   };
 
+  const inputClass = "w-full rounded-2xl border border-border bg-surface px-4 py-3 text-sm text-text-primary outline-none";
+
   if (loading) {
     return (
-      <div className="flex items-center justify-center h-[60vh]">
-        <Loader2 className="h-6 w-6 animate-spin text-accent" />
+      <div className="flex items-center justify-center py-24">
+        <Loader2 className="h-8 w-8 animate-spin text-accent" />
       </div>
     );
   }
 
-  const inputClass =
-    "h-9 w-full rounded-lg border border-border bg-bg px-3 text-sm text-text-primary transition-colors focus:border-accent focus:outline-none";
-
   return (
-    <div className="space-y-8 animate-[fadeIn_0.3s_ease-out]">
-      {/* Alert Rules */}
-      <section>
-        <div className="flex items-center justify-between mb-4">
-          <div className="flex items-center gap-2">
-            <Bell className="h-5 w-5 text-accent" />
-            <h2 className="text-lg font-bold text-text-primary">{tx("告警规则", "Alert Rules")}</h2>
-          </div>
-          <button
-            onClick={() => setShowRuleForm(!showRuleForm)}
-            className="flex items-center gap-1.5 rounded-lg bg-accent px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-accent-hover"
-          >
-            {showRuleForm ? <X className="w-4 h-4" /> : <Plus className="w-4 h-4" />}
+    <div className="space-y-6">
+      <PageHeader
+        eyebrow={tx("告警治理", "Alert Governance")}
+        title={tx("规则与通知渠道", "Rules and Notification Channels")}
+        description={tx("把阈值、持续时间和通知通道放在同一工作区，减少重复配置和漏配。", "Keep thresholds, durations, and channels in one workspace to reduce repeated setup and omissions.")}
+      />
+
+      <SectionCard
+        title={tx("告警规则", "Alert Rules")}
+        description={tx("规则按指标、条件、持续时间和通知渠道组合定义。", "Rules are defined by metric, condition, duration, and notification channel.")}
+        actions={
+          <button type="button" onClick={() => setShowRuleForm((value) => !value)} className="gradient-button inline-flex items-center gap-2 rounded-2xl px-4 py-2.5 text-sm font-medium text-white">
+            {showRuleForm ? <X className="h-4 w-4" /> : <Plus className="h-4 w-4" />}
             {showRuleForm ? tx("取消", "Cancel") : tx("新建规则", "New Rule")}
           </button>
-        </div>
-
-        {showRuleForm && (
-          <div className="mb-4 space-y-4 rounded-xl border border-border bg-card p-5">
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-              <div>
-                <label className="mb-1 block text-xs text-text-secondary">{tx("名称", "Name")}</label>
-                <input value={ruleName} onChange={(e) => setRuleName(e.target.value)} className={inputClass} placeholder={tx("高 CPU 告警", "High CPU Alert")} />
-              </div>
-              <div>
-                <label className="mb-1 block text-xs text-text-secondary">{tx("节点 UUID（可选）", "Node UUID (optional)")}</label>
-                <input value={ruleNodeUuid} onChange={(e) => setRuleNodeUuid(e.target.value)} className={inputClass} placeholder={tx("留空表示全部节点", "All nodes if empty")} />
-              </div>
-              <div>
-                <label className="mb-1 block text-xs text-text-secondary">{tx("指标", "Metric")}</label>
-                <select value={ruleMetric} onChange={(e) => setRuleMetric(e.target.value)} className={inputClass}>
-                  {METRICS.map((m) => (
-                    <option key={m} value={m}>{m}</option>
-                  ))}
-                </select>
-              </div>
-              <div>
-                <label className="mb-1 block text-xs text-text-secondary">{tx("运算符", "Operator")}</label>
-                <select value={ruleOperator} onChange={(e) => setRuleOperator(e.target.value)} className={inputClass}>
-                  {OPERATORS.map((o) => (
-                    <option key={o} value={o}>{o}</option>
-                  ))}
-                </select>
-              </div>
-              <div>
-                <label className="mb-1 block text-xs text-text-secondary">{tx("阈值", "Threshold")}</label>
-                <input type="number" value={ruleThreshold} onChange={(e) => setRuleThreshold(Number(e.target.value))} className={inputClass} />
-              </div>
-              <div>
-                <label className="mb-1 block text-xs text-text-secondary">{tx("持续时间（秒）", "Duration (s)")}</label>
-                <input type="number" value={ruleDuration} onChange={(e) => setRuleDuration(Number(e.target.value))} className={inputClass} />
-              </div>
-              <div>
-                <label className="mb-1 block text-xs text-text-secondary">{tx("通知渠道", "Channel")}</label>
-                <select value={ruleChannelId} onChange={(e) => setRuleChannelId(Number(e.target.value))} className={inputClass}>
-                  <option value={0}>{tx("无", "None")}</option>
-                  {channels.map((c) => (
-                    <option key={c.id} value={c.id}>{c.name}</option>
-                  ))}
-                </select>
-              </div>
+        }
+      >
+        {showRuleForm ? (
+          <div className="mb-4 grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+            <label className="space-y-2">
+              <span className="text-sm font-medium text-text-secondary">{tx("名称", "Name")}</span>
+              <input value={ruleName} onChange={(e) => setRuleName(e.target.value)} className={inputClass} placeholder={tx("高 CPU 告警", "High CPU Alert")} />
+            </label>
+            <label className="space-y-2">
+              <span className="text-sm font-medium text-text-secondary">{tx("节点 UUID（可选）", "Node UUID (optional)")}</span>
+              <input value={ruleNodeUuid} onChange={(e) => setRuleNodeUuid(e.target.value)} className={inputClass} placeholder="node-uuid" />
+            </label>
+            <label className="space-y-2">
+              <span className="text-sm font-medium text-text-secondary">{tx("指标", "Metric")}</span>
+              <SelectField value={ruleMetric} onChange={(e) => setRuleMetric(e.target.value)} className={inputClass}>
+                {METRICS.map((metric) => <option key={metric} value={metric}>{metric}</option>)}
+              </SelectField>
+            </label>
+            <label className="space-y-2">
+              <span className="text-sm font-medium text-text-secondary">{tx("条件", "Operator")}</span>
+              <SelectField value={ruleOperator} onChange={(e) => setRuleOperator(e.target.value)} className={inputClass}>
+                {OPERATORS.map((operator) => <option key={operator} value={operator}>{operator}</option>)}
+              </SelectField>
+            </label>
+            <label className="space-y-2">
+              <span className="text-sm font-medium text-text-secondary">{tx("阈值", "Threshold")}</span>
+              <input type="number" value={ruleThreshold} onChange={(e) => setRuleThreshold(Number(e.target.value))} className={inputClass} />
+            </label>
+            <label className="space-y-2">
+              <span className="text-sm font-medium text-text-secondary">{tx("持续秒数", "Duration (seconds)")}</span>
+              <input type="number" value={ruleDuration} onChange={(e) => setRuleDuration(Number(e.target.value))} className={inputClass} />
+            </label>
+            <label className="space-y-2 md:col-span-2 xl:col-span-1">
+              <span className="text-sm font-medium text-text-secondary">{tx("通知渠道", "Notification Channel")}</span>
+              <SelectField value={ruleChannelId} onChange={(e) => setRuleChannelId(Number(e.target.value))} className={inputClass}>
+                <option value={0}>{tx("未选择", "Not selected")}</option>
+                {channels.map((channel) => <option key={channel.id} value={channel.id}>{channel.name}</option>)}
+              </SelectField>
+            </label>
+            <div className="flex items-end justify-end md:col-span-2 xl:col-span-3">
+              <button type="button" onClick={handleCreateRule} disabled={ruleSubmitting || !ruleName} className="gradient-button inline-flex items-center gap-2 rounded-2xl px-4 py-2.5 text-sm font-medium text-white disabled:opacity-50">
+                {ruleSubmitting ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+                {tx("创建规则", "Create Rule")}
+              </button>
             </div>
-            <button
-              onClick={handleCreateRule}
-              disabled={ruleSubmitting || !ruleName}
-              className="flex items-center gap-2 rounded-lg bg-accent px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-accent-hover disabled:opacity-50"
-            >
-              {ruleSubmitting && <Loader2 className="w-4 h-4 animate-spin" />}
-              {tx("创建规则", "Create Rule")}
-            </button>
           </div>
-        )}
+        ) : null}
 
         {rules.length === 0 ? (
-          <div className="rounded-xl border border-border bg-card p-8 text-center text-sm text-text-muted">
-            {tx("尚未配置告警规则", "No alert rules configured")}
-          </div>
+          <EmptyState icon={Bell} title={tx("尚未配置告警规则", "No alert rules configured")} description={tx("规则创建后会按持续时间窗口评估，并通过已绑定的渠道发送通知。", "Once created, rules are evaluated by duration window and notify through the selected channel.")} />
         ) : (
-          <div className="overflow-hidden rounded-xl border border-border bg-card divide-y divide-border">
+          <div className="space-y-3">
             {rules.map((rule) => (
-              <div
-                key={rule.id}
-                className="flex items-center gap-4 px-5 py-3 transition-colors hover:bg-border/50"
-              >
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2 mb-0.5">
-                    <span className="text-sm font-medium text-text-primary">{rule.name}</span>
-                    <span className="rounded bg-accent/10 px-2 py-0.5 text-[10px] font-medium text-accent">
-                      {rule.metric}
-                    </span>
+              <div key={rule.id} className="flex flex-col gap-4 rounded-3xl border border-border bg-surface px-4 py-4 md:flex-row md:items-center md:justify-between md:px-5">
+                <div className="min-w-0 flex-1 space-y-2">
+                  <div className="flex flex-wrap items-center gap-3">
+                    <span className="truncate text-sm font-semibold text-text-primary">{rule.name}</span>
+                    <StatusBadge tone={rule.enabled ? "success" : "danger"} label={rule.enabled ? tx("启用中", "Enabled") : tx("已禁用", "Disabled")} />
+                    <span className="rounded-full border border-border bg-card px-3 py-1 text-xs text-text-secondary">{rule.metric}</span>
                   </div>
-                  <span className="text-xs text-text-muted">
-                    {rule.operator} {rule.threshold} {tx("持续", "for")} {rule.duration}s
-                  </span>
+                  <p className="text-xs text-text-muted">
+                    {rule.operator} {rule.threshold} · {tx("持续", "for")} {rule.duration}s · channel #{rule.channel_id || 0}
+                  </p>
                 </div>
-                <button
-                  onClick={() => handleToggleRule(rule)}
-                  className={`relative w-9 h-5 rounded-full transition-colors ${
-                    rule.enabled ? "bg-accent" : "bg-border"
-                  }`}
-                >
-                  <span
-                    className={`absolute top-0.5 w-4 h-4 rounded-full bg-white transition-transform ${
-                      rule.enabled ? "left-[18px]" : "left-0.5"
-                    }`}
-                  />
-                </button>
-                <button
-                  onClick={() => handleDeleteRule(rule.id)}
-                  className="text-text-muted transition-colors hover:text-offline"
-                >
-                  <Trash2 className="w-4 h-4" />
-                </button>
+                <div className="flex items-center gap-2">
+                  <button type="button" onClick={() => void handleToggleRule(rule)} className={`rounded-full px-3 py-2 text-xs font-medium ${rule.enabled ? "bg-accent-muted text-accent" : "bg-card text-text-secondary"}`}>
+                    {rule.enabled ? tx("停用", "Disable") : tx("启用", "Enable")}
+                  </button>
+                  <button type="button" onClick={() => void handleDeleteRule(rule.id)} className="rounded-2xl border border-border bg-card p-2 text-text-muted transition-colors hover:border-offline/20 hover:bg-offline/10 hover:text-offline">
+                    <Trash2 className="h-4 w-4" />
+                  </button>
+                </div>
               </div>
             ))}
           </div>
         )}
-      </section>
+      </SectionCard>
 
-      {/* Notification Channels */}
-      <section>
-        <div className="flex items-center justify-between mb-4">
-          <div className="flex items-center gap-2">
-            <Send className="h-5 w-5 text-[#a855f7]" />
-            <h2 className="text-lg font-bold text-text-primary">
-              {tx("通知渠道", "Notification Channels")}
-            </h2>
-          </div>
-          <button
-            onClick={() => setShowChannelForm(!showChannelForm)}
-            className="flex items-center gap-1.5 rounded-lg bg-accent px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-accent-hover"
-          >
-            {showChannelForm ? <X className="w-4 h-4" /> : <Plus className="w-4 h-4" />}
+      <SectionCard
+        title={tx("通知渠道", "Notification Channels")}
+        description={tx("支持 Webhook、Telegram、Email、Bark 与 ServerChan。", "Support Webhook, Telegram, Email, Bark, and ServerChan.")}
+        actions={
+          <button type="button" onClick={() => setShowChannelForm((value) => !value)} className="gradient-button inline-flex items-center gap-2 rounded-2xl px-4 py-2.5 text-sm font-medium text-white">
+            {showChannelForm ? <X className="h-4 w-4" /> : <Plus className="h-4 w-4" />}
             {showChannelForm ? tx("取消", "Cancel") : tx("新建渠道", "New Channel")}
           </button>
-        </div>
-
-        {showChannelForm && (
-          <div className="mb-4 space-y-4 rounded-xl border border-border bg-card p-5">
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <div>
-                <label className="mb-1 block text-xs text-text-secondary">{tx("名称", "Name")}</label>
+        }
+      >
+        {showChannelForm ? (
+          <div className="mb-4 space-y-4 rounded-3xl border border-border bg-surface px-4 py-4 md:px-5">
+            <div className="grid gap-4 md:grid-cols-2">
+              <label className="space-y-2">
+                <span className="text-sm font-medium text-text-secondary">{tx("名称", "Name")}</span>
                 <input value={channelName} onChange={(e) => setChannelName(e.target.value)} className={inputClass} placeholder={tx("运维团队", "Ops Team")} />
-              </div>
-              <div>
-                <label className="mb-1 block text-xs text-text-secondary">{tx("类型", "Type")}</label>
-                <select value={channelType} onChange={(e) => setChannelType(e.target.value as typeof channelType)} className={inputClass}>
-                  <option value="webhook">{tx("Webhook", "Webhook")}</option>
-                  <option value="telegram">{tx("Telegram", "Telegram")}</option>
+              </label>
+              <label className="space-y-2">
+                <span className="text-sm font-medium text-text-secondary">{tx("类型", "Type")}</span>
+                <SelectField value={channelType} onChange={(e) => setChannelType(e.target.value as typeof channelType)} className={inputClass}>
+                  <option value="webhook">Webhook</option>
+                  <option value="telegram">Telegram</option>
                   <option value="email">{tx("邮件", "Email")}</option>
-                  <option value="bark">{tx("Bark", "Bark")}</option>
-                  <option value="serverchan">{tx("ServerChan", "ServerChan")}</option>
-                </select>
-              </div>
+                  <option value="bark">Bark</option>
+                  <option value="serverchan">ServerChan</option>
+                </SelectField>
+              </label>
             </div>
 
-            {/* Webhook / Bark */}
-            {(channelType === "webhook" || channelType === "bark") && (
-              <div>
-                <label className="mb-1 block text-xs text-text-secondary">
-                  {tx("地址 URL", "URL")}
-                </label>
+            {(channelType === "webhook" || channelType === "bark") ? (
+              <label className="space-y-2">
+                <span className="text-sm font-medium text-text-secondary">URL</span>
                 <input value={channelConfigUrl} onChange={(e) => setChannelConfigUrl(e.target.value)} className={inputClass} placeholder="https://hooks.example.com/..." />
-              </div>
-            )}
+              </label>
+            ) : null}
 
-            {/* Telegram */}
-            {channelType === "telegram" && (
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <div>
-                  <label className="mb-1 block text-xs text-text-secondary">
-                    {tx("Bot Token", "Bot Token")}
-                  </label>
+            {channelType === "telegram" ? (
+              <div className="grid gap-4 md:grid-cols-2">
+                <label className="space-y-2">
+                  <span className="text-sm font-medium text-text-secondary">Bot Token</span>
                   <input value={channelConfigBotToken} onChange={(e) => setChannelConfigBotToken(e.target.value)} className={inputClass} placeholder="123456:ABC-DEF..." />
-                </div>
-                <div>
-                  <label className="mb-1 block text-xs text-text-secondary">
-                    {tx("Chat ID", "Chat ID")}
-                  </label>
-                  <input value={channelConfigChatId} onChange={(e) => setChannelConfigChatId(e.target.value)} className={inputClass} placeholder="-1001234567890" />
-                </div>
-              </div>
-            )}
-
-            {/* Email */}
-            {channelType === "email" && (
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                <div>
-                  <label className="mb-1 block text-xs text-text-secondary">
-                    {tx("SMTP 主机", "SMTP Host")}
-                  </label>
-                  <input value={channelConfigSmtpHost} onChange={(e) => setChannelConfigSmtpHost(e.target.value)} className={inputClass} placeholder="smtp.gmail.com" />
-                </div>
-                <div>
-                  <label className="mb-1 block text-xs text-text-secondary">
-                    {tx("SMTP 端口", "SMTP Port")}
-                  </label>
-                  <input value={channelConfigSmtpPort} onChange={(e) => setChannelConfigSmtpPort(e.target.value)} className={inputClass} placeholder="587" />
-                </div>
-                <div>
-                  <label className="mb-1 block text-xs text-text-secondary">{tx("用户名", "Username")}</label>
-                  <input value={channelConfigSmtpUser} onChange={(e) => setChannelConfigSmtpUser(e.target.value)} className={inputClass} />
-                </div>
-                <div>
-                  <label className="mb-1 block text-xs text-text-secondary">{tx("密码", "Password")}</label>
-                  <input type="password" value={channelConfigSmtpPass} onChange={(e) => setChannelConfigSmtpPass(e.target.value)} className={inputClass} />
-                </div>
-                <div>
-                  <label className="mb-1 block text-xs text-text-secondary">{tx("发件人", "From")}</label>
-                  <input value={channelConfigFrom} onChange={(e) => setChannelConfigFrom(e.target.value)} className={inputClass} placeholder="alerts@example.com" />
-                </div>
-                <div>
-                  <label className="mb-1 block text-xs text-text-secondary">{tx("收件人", "To")}</label>
-                  <input value={channelConfigTo} onChange={(e) => setChannelConfigTo(e.target.value)} className={inputClass} placeholder="admin@example.com" />
-                </div>
-              </div>
-            )}
-
-            {/* ServerChan */}
-            {channelType === "serverchan" && (
-              <div>
-                <label className="mb-1 block text-xs text-text-secondary">
-                  {tx("SendKey", "SendKey")}
                 </label>
-                <input value={channelConfigSendKey} onChange={(e) => setChannelConfigSendKey(e.target.value)} className={inputClass} placeholder="SCT1234567890" />
+                <label className="space-y-2">
+                  <span className="text-sm font-medium text-text-secondary">Chat ID</span>
+                  <input value={channelConfigChatId} onChange={(e) => setChannelConfigChatId(e.target.value)} className={inputClass} placeholder="-1001234567890" />
+                </label>
               </div>
-            )}
+            ) : null}
 
-            <button
-              onClick={handleCreateChannel}
-              disabled={channelSubmitting || !channelName}
-              className="flex items-center gap-2 rounded-lg bg-accent px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-accent-hover disabled:opacity-50"
-            >
-              {channelSubmitting && <Loader2 className="w-4 h-4 animate-spin" />}
-              {tx("创建渠道", "Create Channel")}
-            </button>
-          </div>
-        )}
+            {channelType === "email" ? (
+              <div className="grid gap-4 md:grid-cols-3">
+                <label className="space-y-2"><span className="text-sm font-medium text-text-secondary">SMTP Host</span><input value={channelConfigSmtpHost} onChange={(e) => setChannelConfigSmtpHost(e.target.value)} className={inputClass} placeholder="smtp.gmail.com" /></label>
+                <label className="space-y-2"><span className="text-sm font-medium text-text-secondary">SMTP Port</span><input value={channelConfigSmtpPort} onChange={(e) => setChannelConfigSmtpPort(e.target.value)} className={inputClass} placeholder="587" /></label>
+                <label className="space-y-2"><span className="text-sm font-medium text-text-secondary">{tx("用户名", "Username")}</span><input value={channelConfigSmtpUser} onChange={(e) => setChannelConfigSmtpUser(e.target.value)} className={inputClass} /></label>
+                <label className="space-y-2"><span className="text-sm font-medium text-text-secondary">{tx("密码", "Password")}</span><input type="password" value={channelConfigSmtpPass} onChange={(e) => setChannelConfigSmtpPass(e.target.value)} className={inputClass} /></label>
+                <label className="space-y-2"><span className="text-sm font-medium text-text-secondary">{tx("发件人", "From")}</span><input value={channelConfigFrom} onChange={(e) => setChannelConfigFrom(e.target.value)} className={inputClass} placeholder="alerts@example.com" /></label>
+                <label className="space-y-2"><span className="text-sm font-medium text-text-secondary">{tx("收件人", "To")}</span><input value={channelConfigTo} onChange={(e) => setChannelConfigTo(e.target.value)} className={inputClass} placeholder="admin@example.com" /></label>
+              </div>
+            ) : null}
 
-        {editingChannelId && (
-          <div className="mb-4 space-y-4 rounded-xl border border-border bg-card p-5">
-            <div className="flex items-center justify-between">
-              <h3 className="text-sm font-semibold text-text-primary">{tx("编辑渠道", "Edit Channel")}</h3>
-              <button
-                onClick={() => setEditingChannelId(null)}
-                className="rounded p-1 text-text-muted transition-colors hover:text-text-primary"
-              >
-                <X className="w-4 h-4" />
+            {channelType === "serverchan" ? (
+              <label className="space-y-2">
+                <span className="text-sm font-medium text-text-secondary">SendKey</span>
+                <input value={channelConfigSendKey} onChange={(e) => setChannelConfigSendKey(e.target.value)} className={inputClass} placeholder="SCT1234567890" />
+              </label>
+            ) : null}
+
+            <div className="flex justify-end">
+              <button type="button" onClick={handleCreateChannel} disabled={channelSubmitting || !channelName} className="gradient-button inline-flex items-center gap-2 rounded-2xl px-4 py-2.5 text-sm font-medium text-white disabled:opacity-50">
+                {channelSubmitting ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+                {tx("创建渠道", "Create Channel")}
               </button>
             </div>
-            <div>
-              <label className="mb-1 block text-xs text-text-secondary">{tx("名称", "Name")}</label>
-              <input
-                value={editChannelName}
-                onChange={(e) => setEditChannelName(e.target.value)}
-                className={inputClass}
-              />
-            </div>
-            <div>
-              <label className="mb-1 block text-xs text-text-secondary">
-                {tx("配置（JSON）", "Config (JSON)")}
-              </label>
-              <textarea
-                value={editChannelConfig}
-                onChange={(e) => setEditChannelConfig(e.target.value)}
-                className="min-h-32 w-full rounded-lg border border-border bg-bg px-3 py-2 font-mono text-xs text-text-primary transition-colors focus:border-accent focus:outline-none"
-              />
-            </div>
-            <button
-              onClick={handleUpdateChannel}
-              disabled={channelUpdating || !editChannelName.trim()}
-              className="flex items-center gap-2 rounded-lg bg-accent px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-accent-hover disabled:opacity-50"
-            >
-              {channelUpdating && <Loader2 className="w-4 h-4 animate-spin" />}
-              {tx("保存渠道", "Save Channel")}
-            </button>
           </div>
-        )}
+        ) : null}
+
+        {editingChannelId ? (
+          <div className="mb-4 space-y-4 rounded-3xl border border-border bg-surface px-4 py-4 md:px-5">
+            <div className="flex items-center justify-between">
+              <h3 className="text-sm font-semibold text-text-primary">{tx("编辑渠道", "Edit Channel")}</h3>
+              <button type="button" onClick={() => setEditingChannelId(null)} className="rounded-2xl border border-border bg-card p-2 text-text-muted transition-colors hover:text-text-primary">
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+            <label className="space-y-2">
+              <span className="text-sm font-medium text-text-secondary">{tx("名称", "Name")}</span>
+              <input value={editChannelName} onChange={(e) => setEditChannelName(e.target.value)} className={inputClass} />
+            </label>
+            <label className="space-y-2">
+              <span className="text-sm font-medium text-text-secondary">{tx("配置（JSON）", "Config (JSON)")}</span>
+              <textarea value={editChannelConfig} onChange={(e) => setEditChannelConfig(e.target.value)} className="min-h-36 w-full rounded-2xl border border-border bg-card px-4 py-3 font-mono text-xs text-text-primary outline-none" />
+            </label>
+            <div className="flex justify-end">
+              <button type="button" onClick={handleUpdateChannel} disabled={channelUpdating || !editChannelName.trim()} className="gradient-button inline-flex items-center gap-2 rounded-2xl px-4 py-2.5 text-sm font-medium text-white disabled:opacity-50">
+                {channelUpdating ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+                {tx("保存渠道", "Save Channel")}
+              </button>
+            </div>
+          </div>
+        ) : null}
 
         {channels.length === 0 ? (
-          <div className="rounded-xl border border-border bg-card p-8 text-center text-sm text-text-muted">
-            {tx("尚未配置通知渠道", "No notification channels configured")}
-          </div>
+          <EmptyState icon={Send} title={tx("尚未配置通知渠道", "No notification channels configured")} description={tx("先创建渠道，再把规则绑定到具体的通知出口。", "Create a channel first, then bind rules to a concrete notification destination.")} />
         ) : (
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            {channels.map((ch) => {
-              const style = CHANNEL_TYPE_STYLES[ch.type] || CHANNEL_TYPE_STYLES.webhook;
+          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+            {channels.map((channel) => {
+              const style = CHANNEL_TYPE_STYLES[channel.type] || CHANNEL_TYPE_STYLES.webhook;
               const Icon = style.icon;
               return (
-                <div
-                  key={ch.id}
-                  className="flex items-center gap-3 rounded-xl border border-border bg-card p-4"
-                >
-                  <div className={`w-9 h-9 rounded-lg flex items-center justify-center ${style.bg}`}>
-                    <Icon className={`w-4 h-4 ${style.text}`} />
+                <div key={channel.id} className="flex items-center gap-3 rounded-3xl border border-border bg-surface px-4 py-4">
+                  <span className={`flex h-11 w-11 items-center justify-center rounded-2xl bg-card ${style.tone}`}>
+                    <Icon className="h-4 w-4" />
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-sm font-semibold text-text-primary">{channel.name}</p>
+                    <p className="text-xs text-text-muted">{channel.type}</p>
                   </div>
-                  <div className="min-w-0">
-                    <p className="text-sm font-medium text-text-primary">{ch.name}</p>
-                    <p className={`text-xs ${style.text}`}>{ch.type}</p>
-                  </div>
-                  <button
-                    onClick={() => openEditChannel(ch)}
-                    className="ml-auto rounded-md p-1.5 text-text-muted transition-colors hover:bg-accent/10 hover:text-accent"
-                    title={tx("编辑渠道", "Edit channel")}
-                  >
-                    <Pencil className="w-4 h-4" />
+                  <button type="button" onClick={() => openEditChannel(channel)} className="rounded-2xl border border-border bg-card p-2 text-text-muted transition-colors hover:border-accent/20 hover:bg-accent-muted hover:text-accent">
+                    <Pencil className="h-4 w-4" />
                   </button>
                 </div>
               );
             })}
           </div>
         )}
-      </section>
+      </SectionCard>
     </div>
   );
 }

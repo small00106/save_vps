@@ -1,7 +1,9 @@
 import { useState } from "react";
 import { useAuth } from "../hooks/useAuth";
-import { Lock, User, ArrowRight, Loader2 } from "lucide-react";
+import { ArrowRight, FolderTree, Loader2, Lock, ShieldCheck, User, Waves } from "lucide-react";
 import { useI18n } from "../i18n/useI18n";
+import { Banner } from "../components/ui";
+import { ApiError } from "../api/client";
 
 export default function LoginPage() {
   const { login, notice, clearNotice } = useAuth();
@@ -18,148 +20,160 @@ export default function LoginPage() {
     setLoading(true);
     try {
       await login(username, password);
-    } catch {
-      setError(tx("用户名或密码错误", "Invalid credentials"));
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 401) {
+        setError(tx("用户名或密码错误", "Invalid credentials"));
+      } else {
+        setError(
+          tx(
+            "无法连接到后端服务，请确认 Master 已启动。",
+            "Unable to reach the backend service. Confirm the master is running.",
+          ),
+        );
+      }
     } finally {
       setLoading(false);
     }
   };
 
   return (
-    <div className="relative flex min-h-dvh items-center justify-center p-4 overflow-hidden">
-      {/* Animated gradient background blobs */}
-      <div className="absolute inset-0 -z-10 overflow-hidden">
-        <div 
-          className="absolute -top-1/4 -left-1/4 h-[600px] w-[600px] rounded-full opacity-30"
-          style={{
-            background: "radial-gradient(circle, var(--ui-accent) 0%, transparent 70%)",
-            filter: "blur(80px)",
-            animation: "float 8s ease-in-out infinite",
-          }}
-        />
-        <div 
-          className="absolute -bottom-1/4 -right-1/4 h-[500px] w-[500px] rounded-full opacity-25"
-          style={{
-            background: "radial-gradient(circle, var(--ui-accent-secondary) 0%, transparent 70%)",
-            filter: "blur(80px)",
-            animation: "float 10s ease-in-out infinite reverse",
-          }}
-        />
-        <div 
-          className="absolute top-1/3 right-1/4 h-[400px] w-[400px] rounded-full opacity-20"
-          style={{
-            background: "radial-gradient(circle, var(--ui-accent-tertiary) 0%, transparent 70%)",
-            filter: "blur(60px)",
-            animation: "float 12s ease-in-out infinite",
-          }}
-        />
-      </div>
+    <div className="flex min-h-dvh items-center justify-center px-4 py-8">
+      <div className="grid w-full max-w-6xl gap-6 lg:grid-cols-[1.1fr_0.9fr]">
+        <section className="surface-card hidden rounded-[32px] px-8 py-10 lg:flex lg:flex-col lg:justify-between">
+          <div className="space-y-8">
+            <div className="space-y-4">
+              <span className="inline-flex items-center rounded-full border border-accent/15 bg-accent-muted px-3 py-1 text-xs font-semibold uppercase tracking-[0.24em] text-accent">
+                CloudNest
+              </span>
+              <div className="space-y-3">
+                <h1 className="max-w-xl text-4xl font-semibold tracking-tight text-text-primary">
+                  {tx("统一掌握节点、文件与告警状态。", "Operate nodes, files, and alerts from one console.")}
+                </h1>
+                <p className="max-w-xl text-base leading-7 text-text-secondary">
+                  {tx(
+                    "为个人运维场景整理成更克制、更稳定的控制台界面。登录后即可查看节点健康、文件代理与告警治理。",
+                    "A restrained, stable console for personal operations. Sign in to review node health, storage proxying, and alert governance.",
+                  )}
+                </p>
+              </div>
+            </div>
 
-      <form
-        onSubmit={handleSubmit}
-        className="relative w-full max-w-md animate-slide-up glass-card rounded-2xl p-8 md:p-10"
-      >
-        {/* Decorative gradient border effect */}
-        <div 
-          className="absolute -inset-[1px] rounded-2xl opacity-50 -z-10"
-          style={{
-            background: "linear-gradient(135deg, var(--ui-accent), var(--ui-accent-secondary), var(--ui-accent-tertiary))",
-          }}
-        />
-
-        {/* Header */}
-        <div className="mb-8 flex flex-col items-center gap-4">
-          <div 
-            className="flex h-16 w-16 items-center justify-center rounded-2xl"
-            style={{
-              background: "linear-gradient(135deg, var(--ui-accent), var(--ui-accent-secondary))",
-              boxShadow: "0 8px 32px var(--ui-accent-glow)",
-            }}
-          >
-            <Lock className="h-8 w-8 text-white" />
+            <div className="grid gap-4">
+              {[
+                {
+                  icon: Waves,
+                  title: tx("实时状态", "Real-time status"),
+                  description: tx("连接情况、节点健康和流量信息集中呈现。", "Connectivity, health, and traffic are presented in one place."),
+                },
+                {
+                  icon: FolderTree,
+                  title: tx("文件代理", "File proxy"),
+                  description: tx("统一浏览和下载托管文件，不暴露 Agent 数据面。", "Browse and download managed files without exposing the agent data plane."),
+                },
+                {
+                  icon: ShieldCheck,
+                  title: tx("治理闭环", "Governance loop"),
+                  description: tx("规则、通知与审计日志维持同一套管理语境。", "Rules, notifications, and audit logs stay in the same management context."),
+                },
+              ].map(({ icon: Icon, title, description }) => (
+                <div key={title} className="rounded-3xl border border-border bg-surface px-5 py-4">
+                  <div className="flex items-start gap-4">
+                    <span className="flex h-11 w-11 items-center justify-center rounded-2xl bg-accent-muted text-accent">
+                      <Icon className="h-5 w-5" />
+                    </span>
+                    <div className="space-y-1">
+                      <h2 className="text-base font-semibold text-text-primary">{title}</h2>
+                      <p className="text-sm leading-6 text-text-secondary">{description}</p>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
           </div>
-          <div className="text-center">
-            <h1 className="text-2xl font-bold text-text-primary">
-              {tx("欢迎回来", "Welcome back")}
-            </h1>
-            <p className="mt-1 text-sm text-text-muted">
-              {tx("登录后进入控制台", "Sign in to your dashboard")}
-            </p>
-          </div>
-        </div>
 
-        {/* Error message */}
-        {notice && (
-          <div className="mb-6 rounded-xl border border-accent/20 bg-accent/10 px-4 py-3 text-sm text-text-primary animate-slide-up">
-            {notice}
-          </div>
-        )}
-        {error && (
-          <div className="mb-6 rounded-xl bg-offline/10 border border-offline/20 px-4 py-3 text-sm text-offline animate-slide-up">
-            {error}
-          </div>
-        )}
-
-        {/* Form fields */}
-        <div className="space-y-5">
-          <label className="block">
-            <span className="mb-2 flex items-center gap-2 text-sm font-medium text-text-secondary">
-              <User className="h-4 w-4" />
-              {tx("用户名", "Username")}
-            </span>
-            <input
-              type="text"
-              value={username}
-              onChange={(e) => setUsername(e.target.value)}
-              required
-              autoFocus
-              placeholder={tx("请输入用户名", "Enter your username")}
-              className="w-full rounded-xl border border-border bg-bg/50 px-4 py-3 text-sm text-text-primary placeholder-text-muted outline-none transition-all duration-200 focus:border-accent focus:bg-bg/80"
-            />
-          </label>
-
-          <label className="block">
-            <span className="mb-2 flex items-center gap-2 text-sm font-medium text-text-secondary">
-              <Lock className="h-4 w-4" />
-              {tx("密码", "Password")}
-            </span>
-            <input
-              type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              required
-              placeholder={tx("请输入密码", "Enter your password")}
-              className="w-full rounded-xl border border-border bg-bg/50 px-4 py-3 text-sm text-text-primary placeholder-text-muted outline-none transition-all duration-200 focus:border-accent focus:bg-bg/80"
-            />
-          </label>
-        </div>
-
-        {/* Submit button */}
-        <button
-          type="submit"
-          disabled={loading}
-          className="gradient-button mt-8 flex w-full items-center justify-center gap-2 rounded-xl py-3.5 text-sm font-semibold text-white disabled:opacity-50 disabled:cursor-not-allowed"
-        >
-          {loading ? (
-            <>
-              <Loader2 className="h-4 w-4 animate-spin" />
-              {tx("登录中...", "Signing in...")}
-            </>
-          ) : (
-            <>
-              {tx("登录", "Sign in")}
-              <ArrowRight className="h-4 w-4" />
-            </>
+          <div className="rounded-3xl border border-dashed border-border bg-surface px-5 py-4 text-sm leading-6 text-text-secondary">
+            {tx(
+              "默认管理员账号仍为 admin/admin。首次使用默认密码登录后，系统会保留一次性提醒，避免忽略安全收口。",
+              "The default admin account remains admin/admin. A one-time reminder is kept after first use so the security cleanup is not missed.",
             )}
-        </button>
+          </div>
+        </section>
 
-        <p className="mt-4 text-center text-xs text-text-muted">
-          {tx(
-            "默认管理员账号为 admin/admin。个人项目会保留这个初始入口，并在首次使用默认密码登录后弹出一次修改提醒。",
-            "The default admin account is `admin/admin`. This personal project keeps it as the initial entry point and shows a one-time password-change reminder after the first login with the default password.",
-          )}
-        </p>
-      </form>
+        <section className="surface-card rounded-[32px] px-6 py-8 md:px-8 md:py-10">
+          <form onSubmit={handleSubmit} className="mx-auto w-full max-w-md">
+            <div className="mb-8 space-y-4">
+              <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-accent text-white shadow-[0_14px_26px_var(--ui-accent-glow)]">
+                <Lock className="h-6 w-6" />
+              </div>
+              <div className="space-y-2">
+                <h2 className="text-2xl font-semibold tracking-tight text-text-primary">{tx("登录控制台", "Sign in to CloudNest")}</h2>
+                <p className="text-sm leading-6 text-text-secondary">{tx("输入管理员账户后进入控制台。", "Enter the admin account to access the console.")}</p>
+              </div>
+            </div>
+
+            <div className="space-y-4">
+              {notice ? <Banner tone="primary" role="status">{notice}</Banner> : null}
+              {error ? <Banner tone="danger" role="alert">{error}</Banner> : null}
+
+              <label className="block space-y-2">
+                <span className="flex items-center gap-2 text-sm font-medium text-text-secondary">
+                  <User className="h-4 w-4" />
+                  {tx("用户名", "Username")}
+                </span>
+                <input
+                  type="text"
+                  value={username}
+                  onChange={(e) => setUsername(e.target.value)}
+                  required
+                  autoFocus
+                  placeholder={tx("请输入用户名", "Enter your username")}
+                  className="w-full rounded-2xl border border-border bg-surface px-4 py-3 text-sm text-text-primary placeholder:text-text-muted"
+                />
+              </label>
+
+              <label className="block space-y-2">
+                <span className="flex items-center gap-2 text-sm font-medium text-text-secondary">
+                  <Lock className="h-4 w-4" />
+                  {tx("密码", "Password")}
+                </span>
+                <input
+                  type="password"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  required
+                  placeholder={tx("请输入密码", "Enter your password")}
+                  className="w-full rounded-2xl border border-border bg-surface px-4 py-3 text-sm text-text-primary placeholder:text-text-muted"
+                />
+              </label>
+            </div>
+
+            <button
+              type="submit"
+              disabled={loading}
+              className="gradient-button mt-8 flex w-full items-center justify-center gap-2 rounded-2xl py-3.5 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {loading ? (
+                <>
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  {tx("登录中...", "Signing in...")}
+                </>
+              ) : (
+                <>
+                  {tx("登录", "Sign in")}
+                  <ArrowRight className="h-4 w-4" />
+                </>
+              )}
+            </button>
+
+            <p className="mt-4 rounded-2xl border border-border bg-surface px-4 py-3 text-xs leading-6 text-text-muted">
+              {tx(
+                "默认管理员账号为 admin/admin。个人项目会保留这个初始入口，并在首次使用默认密码登录后弹出一次修改提醒。",
+                "The default admin account is admin/admin. This personal project keeps it as the initial entry point and shows a one-time password-change reminder after the first login with the default password.",
+              )}
+            </p>
+          </form>
+        </section>
+      </div>
     </div>
   );
 }

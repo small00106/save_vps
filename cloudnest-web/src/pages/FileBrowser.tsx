@@ -1,12 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Download, FileText, FolderSearch, Loader2, Search } from "lucide-react";
-import {
-  getDownloadURL,
-  searchFiles,
-  type StoredFile,
-} from "../api/client";
+import { getDownloadURL, searchFiles, type StoredFile } from "../api/client";
 import { triggerDownload } from "../utils/download";
 import { useI18n } from "../i18n/useI18n";
+import { EmptyState, PageHeader, SectionCard, SurfaceBox } from "../components/ui";
 
 function formatBytes(bytes: number, decimals = 1): string {
   if (!bytes || bytes === 0) return "0 B";
@@ -50,7 +47,7 @@ function SearchTab() {
 
   useEffect(() => {
     if (timerRef.current) clearTimeout(timerRef.current);
-    timerRef.current = setTimeout(() => doSearch(query), 300);
+    timerRef.current = setTimeout(() => void doSearch(query), 300);
     return () => {
       if (timerRef.current) clearTimeout(timerRef.current);
     };
@@ -63,63 +60,72 @@ function SearchTab() {
 
   return (
     <div className="space-y-4">
-      <div className="relative">
-        <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-text-muted" />
-        <input
-          type="text"
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          placeholder={tx("按文件名或路径搜索...", "Search files by name or path...")}
-          className="h-10 w-full rounded-lg border border-border bg-card pl-10 pr-4 text-sm text-text-primary placeholder-text-muted transition-colors focus:border-accent focus:outline-none"
-          autoFocus
-        />
-      </div>
+      <SurfaceBox className="flex items-center gap-3">
+        <span className="flex h-11 w-11 items-center justify-center rounded-2xl bg-accent-muted text-accent">
+          <Search className="h-5 w-5" />
+        </span>
+        <div className="min-w-0 flex-1">
+          <label className="sr-only" htmlFor="file-search">{tx("搜索文件", "Search files")}</label>
+          <input
+            id="file-search"
+            type="text"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder={tx("按文件名或路径搜索...", "Search files by name or path...")}
+            className="w-full border-0 bg-transparent text-sm text-text-primary placeholder:text-text-muted outline-none"
+            autoFocus
+          />
+        </div>
+      </SurfaceBox>
 
-      {loading && (
+      {loading ? (
         <div className="flex items-center justify-center py-12">
           <Loader2 className="h-5 w-5 animate-spin text-accent" />
         </div>
-      )}
+      ) : null}
 
-      {!loading && searched && results.length === 0 && (
-        <div className="flex flex-col items-center justify-center py-16 text-text-muted">
-          <FolderSearch className="w-10 h-10 mb-3" />
-          <p className="text-sm">
-            {tx(`未找到与 “${query}” 匹配的文件`, `No files found for "${query}"`)}
-          </p>
-        </div>
-      )}
+      {!loading && searched && results.length === 0 ? (
+        <EmptyState
+          icon={FolderSearch}
+          title={tx("没有匹配文件", "No matching files")}
+          description={tx(`未找到与 “${query}” 匹配的文件。`, `No files found for "${query}".`)}
+        />
+      ) : null}
 
-      {!loading && results.length > 0 && (
-        <div className="overflow-hidden rounded-xl border border-border bg-card">
-          <div className="divide-y divide-border">
-            {results.map((file) => (
-              <button
-                key={file.file_id}
-                onClick={() => void handleDownload(file.file_id)}
-                className="group flex w-full items-center gap-3 px-4 py-2.5 text-left transition-colors hover:bg-border/50"
-              >
-                <FileText className="h-4 w-4 shrink-0 text-text-muted" />
-                <div className="flex-1 min-w-0">
-                  <p className="truncate text-sm text-text-primary">{file.name}</p>
-                  <p className="truncate text-xs text-text-muted">{joinPath(file.path, file.name)}</p>
-                </div>
-                <span className="shrink-0 text-xs text-text-muted">{formatBytes(file.size)}</span>
-                <Download className="h-3 w-3 shrink-0 text-text-muted opacity-0 transition-opacity group-hover:opacity-100" />
-              </button>
-            ))}
+      {!loading && results.length > 0 ? (
+        <SectionCard title={tx("搜索结果", "Search Results")} description={tx("点击任意文件即可通过 Master 代理下载。", "Click any file to download it through the master proxy.")}> 
+          <div className="overflow-hidden rounded-2xl border border-border">
+            <div className="divide-y divide-border">
+              {results.map((file) => (
+                <button
+                  key={file.file_id}
+                  type="button"
+                  onClick={() => void handleDownload(file.file_id)}
+                  className="group flex w-full items-center gap-3 bg-card px-4 py-3 text-left transition-colors hover:bg-surface"
+                >
+                  <span className="flex h-10 w-10 items-center justify-center rounded-2xl bg-surface-subtle text-text-secondary">
+                    <FileText className="h-4 w-4" />
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-sm font-medium text-text-primary">{file.name}</p>
+                    <p className="truncate text-xs text-text-muted">{joinPath(file.path, file.name)}</p>
+                  </div>
+                  <span className="shrink-0 text-xs text-text-muted">{formatBytes(file.size)}</span>
+                  <Download className="h-4 w-4 shrink-0 text-text-muted transition-colors group-hover:text-accent" />
+                </button>
+              ))}
+            </div>
           </div>
-        </div>
-      )}
+        </SectionCard>
+      ) : null}
 
-      {!loading && !searched && (
-        <div className="flex flex-col items-center justify-center py-16 text-text-muted">
-          <Search className="w-10 h-10 mb-3" />
-          <p className="text-sm">
-            {tx("输入关键词开始搜索文件", "Type to search files by name or path")}
-          </p>
-        </div>
-      )}
+      {!loading && !searched ? (
+        <EmptyState
+          icon={Search}
+          title={tx("开始检索托管文件", "Search managed files")}
+          description={tx("输入关键词后，系统会从托管文件元数据中返回匹配结果。", "Type a keyword and the system will return matches from managed file metadata.")}
+        />
+      ) : null}
     </div>
   );
 }
@@ -128,14 +134,12 @@ export default function FileBrowser() {
   const { tx } = useI18n();
 
   return (
-    <div className="space-y-6 animate-[fadeIn_0.3s_ease-out]">
-      <div className="flex items-center justify-between">
-        <h1 className="text-xl font-bold text-text-primary">{tx("文件", "Files")}</h1>
-        <span className="rounded-lg border border-border bg-card px-3 py-1 text-sm text-text-secondary">
-          {tx("仅搜索", "Search only")}
-        </span>
-      </div>
-
+    <div className="space-y-6">
+      <PageHeader
+        eyebrow={tx("托管文件", "Managed Files")}
+        title={tx("文件检索", "File Search")}
+        description={tx("这个页面保留全局托管文件搜索，不包含仅存在于节点扫描目录但尚未入库的文件。", "This page keeps global managed-file search and excludes files that only exist in scanned node directories but are not indexed yet.")}
+      />
       <SearchTab />
     </div>
   );

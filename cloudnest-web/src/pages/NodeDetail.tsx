@@ -1,19 +1,20 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import {
+  Activity,
   ArrowLeft,
   ChevronRight,
   Download,
   FileText,
   Folder,
-  Loader2,
-  RefreshCw,
-  Upload,
-  Terminal,
-  Activity,
   HardDrive,
+  Loader2,
   Network,
+  RefreshCw,
+  ServerOff,
   Tag,
+  Terminal,
+  Upload,
 } from "lucide-react";
 import {
   ApiError,
@@ -34,18 +35,18 @@ import {
 } from "../api/client";
 import { triggerDownload } from "../utils/download";
 import {
-  ResponsiveContainer,
-  LineChart,
+  CartesianGrid,
+  Legend,
   Line,
+  LineChart,
+  ResponsiveContainer,
+  Tooltip,
   XAxis,
   YAxis,
-  CartesianGrid,
-  Tooltip,
-  Legend,
 } from "recharts";
 import { useI18n } from "../i18n/useI18n";
-import { useCardGlow } from "../hooks/useMouseGlow";
 import { getNodeDisplayName, parseNodeTags } from "../utils/nodeDisplayName";
+import { Banner, EmptyState, MetricCard, PageHeader, SectionCard, StatusBadge, SurfaceBox } from "../components/ui";
 
 function formatBytes(bytes: number, decimals = 1): string {
   if (!bytes || bytes === 0) return "0 B";
@@ -81,11 +82,7 @@ function extractUploadURL(res: NodeUploadResponse): string | null {
   return null;
 }
 
-function uploadFileToUrl(
-  url: string,
-  file: File,
-  onProgress: (pct: number) => void,
-): Promise<void> {
+function uploadFileToUrl(url: string, file: File, onProgress: (pct: number) => void): Promise<void> {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     xhr.open("PUT", url, true);
@@ -147,8 +144,6 @@ export default function NodeDetail() {
   const [command, setCommand] = useState("");
   const [runningCommand, setRunningCommand] = useState(false);
   const [commandTask, setCommandTask] = useState<CommandTask | null>(null);
-  
-  const cardGlow = useCardGlow();
 
   useEffect(() => {
     if (!uuid) return;
@@ -158,7 +153,7 @@ export default function NodeDetail() {
         setNode(res.node);
         setTagsInput(parseTagsToInput(res.node.tags));
       })
-      .catch(() => {})
+      .catch(() => setNode(null))
       .finally(() => setLoading(false));
   }, [uuid]);
 
@@ -178,10 +173,7 @@ export default function NodeDetail() {
     if (!uuid || tab !== "metrics") return;
     setMetricsLoading(true);
     getNodeMetrics(uuid, range)
-      .then((data) => {
-        const next = (Array.isArray(data) ? data : []) as MetricPoint[];
-        setMetrics(next);
-      })
+      .then((data) => setMetrics((Array.isArray(data) ? data : []) as MetricPoint[]))
       .catch(() => setMetrics([]))
       .finally(() => setMetricsLoading(false));
   }, [uuid, range, tab]);
@@ -212,11 +204,11 @@ export default function NodeDetail() {
 
   const chartData = useMemo(
     () =>
-      metrics.map((m) => ({
-        time: new Date(m.timestamp || m.bucket_time || "").toLocaleTimeString(),
-        CPU: m.cpu_percent,
-        RAM: m.mem_percent,
-        Disk: m.disk_percent,
+      metrics.map((metric) => ({
+        time: new Date(metric.timestamp || metric.bucket_time || "").toLocaleTimeString(),
+        CPU: metric.cpu_percent,
+        RAM: metric.mem_percent,
+        Disk: metric.disk_percent,
       })),
     [metrics],
   );
@@ -259,14 +251,12 @@ export default function NodeDetail() {
     setSavingTags(true);
     const nextTags = tagsInput
       .split(",")
-      .map((t) => t.trim())
+      .map((tag) => tag.trim())
       .filter(Boolean);
     const raw = JSON.stringify(nextTags);
     try {
       await updateNodeTags(uuid, raw);
       setNode({ ...node, tags: raw });
-    } catch {
-      // ignore
     } finally {
       setSavingTags(false);
     }
@@ -304,10 +294,7 @@ export default function NodeDetail() {
     } catch (error) {
       if (error instanceof ApiError && error.status === 409) {
         const confirmed = window.confirm(
-          tx(
-            "当前目录已存在同名文件，是否覆盖？",
-            "A file with the same name already exists in this directory. Overwrite it?",
-          ),
+          tx("当前目录已存在同名文件，是否覆盖？", "A file with the same name already exists in this directory. Overwrite it?"),
         );
         if (confirmed) {
           try {
@@ -346,8 +333,6 @@ export default function NodeDetail() {
           break;
         }
       }
-    } catch {
-      // ignore
     } finally {
       setRunningCommand(false);
     }
@@ -355,17 +340,19 @@ export default function NodeDetail() {
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center h-[60vh]">
-        <Loader2 className="h-6 w-6 animate-spin text-accent" />
+      <div className="flex items-center justify-center py-24">
+        <Loader2 className="h-8 w-8 animate-spin text-accent" />
       </div>
     );
   }
 
   if (!node) {
     return (
-      <div className="flex h-[60vh] items-center justify-center text-text-muted">
-        {tx("节点不存在", "Node not found")}
-      </div>
+      <EmptyState
+        icon={ServerOff}
+        title={tx("节点不存在", "Node not found")}
+        description={tx("无法加载该节点详情，请确认节点 UUID 是否正确。", "Unable to load node details. Verify that the node UUID is correct.")}
+      />
     );
   }
 
@@ -374,340 +361,175 @@ export default function NodeDetail() {
   const showHostname = displayName !== node.hostname;
 
   return (
-    <div className="space-y-6 animate-[fadeIn_0.3s_ease-out]">
-      {/* Node Header Card */}
-      <div 
-        className="glass-card rounded-2xl p-6 card-glow relative overflow-hidden"
-        onMouseMove={cardGlow.onMouseMove}
+    <div className="space-y-6">
+      <PageHeader
+        eyebrow={tx("节点详情", "Node Detail")}
+        title={displayName}
+        description={showHostname ? `${tx("主机名", "Hostname")}: ${node.hostname}` : `${node.ip || node.region || "-"}`}
+        actions={
+          <>
+            <StatusBadge tone={isOnline ? "success" : "danger"} label={isOnline ? tx("在线", "Online") : tx("离线", "Offline")} />
+            <button type="button" onClick={() => navigate(-1)} className="inline-flex items-center gap-2 rounded-2xl border border-border bg-surface px-4 py-2.5 text-sm font-medium text-text-primary transition-colors hover:border-border-hover hover:bg-card">
+              <ArrowLeft className="h-4 w-4" />
+              {tx("返回", "Back")}
+            </button>
+          </>
+        }
+      />
 
-      >
-        {/* Gradient accent line */}
-        <div className="absolute top-0 left-0 right-0 h-1 bg-gradient-to-r from-purple-500 via-blue-500 to-pink-500" />
-        
-        <div className="flex flex-wrap items-center gap-4 mb-3">
-          <h1 className="text-2xl font-bold bg-gradient-to-r from-purple-400 via-blue-400 to-pink-400 bg-clip-text text-transparent">
-            {displayName}
-          </h1>
-          <span
-            className={`px-3 py-1 rounded-full text-xs font-semibold flex items-center gap-1.5 ${
-              isOnline 
-                ? "bg-gradient-to-r from-emerald-500/20 to-green-500/20 text-emerald-400 border border-emerald-500/30" 
-                : "bg-gray-500/20 text-gray-400 border border-gray-500/30"
-            }`}
-          >
-            <span className={`w-2 h-2 rounded-full ${isOnline ? "bg-emerald-400 animate-pulse" : "bg-gray-500"}`} />
-            {node.status}
-          </span>
-        </div>
-        {showHostname && (
-          <div className="mb-3 text-sm text-text-secondary">
-            {tx("主机名", "Hostname")}: {node.hostname}
-          </div>
-        )}
-        
-        <div className="flex flex-wrap gap-x-6 gap-y-2 text-sm">
-          <span className="flex items-center gap-2 text-text-secondary">
-            <Network className="w-4 h-4 text-purple-400" />
-            {node.ip}:{node.port}
-          </span>
-          <span className="flex items-center gap-2 text-text-secondary">
-            <HardDrive className="w-4 h-4 text-blue-400" />
-            {node.os} / {node.arch}
-          </span>
-          <span className="text-text-secondary">{node.cpu_model} ({node.cpu_cores} {tx("核", "cores")})</span>
-          <span className="text-text-secondary">RAM {formatBytes(node.ram_total)}</span>
-          <span className="text-text-secondary">{tx("磁盘", "Disk")} {formatBytes(node.disk_total)}</span>
-        </div>
+      <div className="grid grid-cols-1 gap-4 xl:grid-cols-3">
+        <MetricCard label={tx("系统与硬件", "System and Hardware")} value={`${node.os}/${node.arch}`} meta={`${node.cpu_model} · ${node.cpu_cores} ${tx("核", "cores")}`} icon={HardDrive} tone="primary" />
+        <MetricCard label={tx("网络位置", "Network Address")} value={`${node.ip || node.region || "-"}:${node.port}`} meta={node.region || tx("未配置地区", "Region not set")} icon={Network} tone="neutral" />
+        <MetricCard label={tx("存储上限", "Disk Capacity")} value={formatBytes(node.disk_total)} meta={`${tx("内存", "Memory")} ${formatBytes(node.ram_total)}`} icon={Activity} tone="warning" />
       </div>
 
-      {/* Info Cards Grid */}
-      <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
-        {/* Tags Card */}
-        <div 
-          className="glass-card rounded-2xl p-5 card-glow relative overflow-hidden group"
-          onMouseMove={cardGlow.onMouseMove}
-  
-        >
-          <div className="flex items-center gap-2 mb-4">
-            <div className="p-2 rounded-lg bg-gradient-to-br from-purple-500/20 to-pink-500/20">
-              <Tag className="w-4 h-4 text-purple-400" />
+      <div className="grid grid-cols-1 gap-4 xl:grid-cols-[1.2fr_0.8fr]">
+        <SectionCard title={tx("节点标签", "Node Tags")} description={tx("第一个标签会作为节点显示名。", "The first tag is used as the node display name.")}> 
+          <div className="flex flex-col gap-4 md:flex-row md:items-end">
+            <label className="min-w-0 flex-1 space-y-2">
+              <span className="flex items-center gap-2 text-sm font-medium text-text-secondary"><Tag className="h-4 w-4" />{tx("标签", "Tags")}</span>
+              <input value={tagsInput} onChange={(e) => setTagsInput(e.target.value)} className="w-full rounded-2xl border border-border bg-surface px-4 py-3 text-sm text-text-primary outline-none" placeholder="prod, beijing, gpu" />
+            </label>
+            <div className="flex gap-2">
+              <button type="button" onClick={handleSaveTags} disabled={savingTags} className="gradient-button rounded-2xl px-4 py-3 text-sm font-medium text-white disabled:opacity-50">
+                {savingTags ? tx("保存中...", "Saving...") : tx("保存标签", "Save Tags")}
+              </button>
+              <button type="button" onClick={() => navigate(`/terminal/${uuid}`)} className="rounded-2xl border border-border bg-surface px-4 py-3 text-sm font-medium text-text-primary transition-colors hover:border-border-hover hover:bg-card">
+                <span className="inline-flex items-center gap-2"><Terminal className="h-4 w-4" />{tx("终端", "Terminal")}</span>
+              </button>
             </div>
-            <p className="text-sm font-medium text-text-primary">
-              {tx("节点标签", "Node Tags")}
-            </p>
           </div>
+        </SectionCard>
+
+        <SectionCard title={tx("流量概览", "Traffic Summary")} description={tx("显示当前瞬时速率和累计流量。", "Show current rates and cumulative traffic.")}> 
+          <div className="grid gap-3 sm:grid-cols-2">
+            <SurfaceBox>
+              <p className="text-xs font-medium uppercase tracking-[0.2em] text-text-muted">{tx("入站速率", "Inbound")}</p>
+              <p className="mt-2 text-xl font-semibold text-text-primary">{formatBytes(traffic?.net_in_speed || 0)}/s</p>
+              <p className="mt-1 text-xs text-text-muted">{tx("总量", "Total")} {formatBytes(traffic?.net_in_total || 0)}</p>
+            </SurfaceBox>
+            <SurfaceBox>
+              <p className="text-xs font-medium uppercase tracking-[0.2em] text-text-muted">{tx("出站速率", "Outbound")}</p>
+              <p className="mt-2 text-xl font-semibold text-text-primary">{formatBytes(traffic?.net_out_speed || 0)}/s</p>
+              <p className="mt-1 text-xs text-text-muted">{tx("总量", "Total")} {formatBytes(traffic?.net_out_total || 0)}</p>
+            </SurfaceBox>
+          </div>
+        </SectionCard>
+      </div>
+
+      <SectionCard title={tx("快速命令", "Quick Command")} description={tx("适合执行单条命令并查看输出。", "Useful for running a single command and reviewing the output.")}> 
+        <div className="flex flex-col gap-3 md:flex-row">
           <input
-            value={tagsInput}
-            onChange={(e) => setTagsInput(e.target.value)}
-            className="h-10 w-full rounded-xl border border-white/10 bg-white/5 px-4 text-sm text-text-primary transition-all focus:border-purple-500/50 focus:bg-white/10 focus:outline-none focus:ring-2 focus:ring-purple-500/20"
-            placeholder="prod, beijing, gpu"
+            value={command}
+            onChange={(e) => setCommand(e.target.value)}
+            className="min-w-0 flex-1 rounded-2xl border border-border bg-surface px-4 py-3 font-mono text-sm text-text-primary outline-none"
+            placeholder="uptime"
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                void handleExecCommand();
+              }
+            }}
           />
-          <p className="mt-2 text-xs text-text-muted">
-            {tx("第一个标签会作为节点显示名", "The first tag is used as the node display name")}
-          </p>
-          <div className="flex items-center gap-2 mt-4">
-            <button
-              onClick={handleSaveTags}
-              disabled={savingTags}
-              className="gradient-button h-9 rounded-xl px-4 text-sm font-medium text-white disabled:opacity-50"
-            >
-              {savingTags ? tx("保存中...", "Saving...") : tx("保存标签", "Save Tags")}
-            </button>
-            <button
-              onClick={() => navigate(`/terminal/${uuid}`)}
-              className="h-9 rounded-xl border border-white/10 bg-white/5 px-4 text-sm font-medium text-text-primary transition-all hover:bg-white/10 hover:border-purple-500/30 flex items-center gap-2"
-            >
-              <Terminal className="w-4 h-4" />
-              {tx("终端", "Terminal")}
-            </button>
-          </div>
+          <button type="button" onClick={() => void handleExecCommand()} disabled={runningCommand || !command.trim()} className="gradient-button rounded-2xl px-4 py-3 text-sm font-medium text-white disabled:opacity-50">
+            {runningCommand ? tx("执行中...", "Running...") : tx("执行", "Run")}
+          </button>
         </div>
 
-        {/* Traffic Card */}
-        <div 
-          className="glass-card rounded-2xl p-5 card-glow relative overflow-hidden"
-          onMouseMove={cardGlow.onMouseMove}
-  
-        >
-          <div className="flex items-center gap-2 mb-4">
-            <div className="p-2 rounded-lg bg-gradient-to-br from-blue-500/20 to-cyan-500/20">
-              <Activity className="w-4 h-4 text-blue-400" />
+        {commandTask ? (
+          <div className="mt-4 rounded-3xl border border-border bg-[#0b1220] p-4 text-slate-200">
+            <div className="mb-3 flex items-center gap-3 text-xs">
+              <StatusBadge
+                tone={commandTask.status === "success" ? "success" : commandTask.status === "failed" ? "danger" : "warning"}
+                label={commandTask.status}
+              />
+              <span className="font-mono text-slate-400">exit_code: {commandTask.exit_code}</span>
             </div>
-            <p className="text-sm font-medium text-text-primary">{tx("流量", "Traffic")}</p>
+            <pre className="max-h-56 overflow-y-auto whitespace-pre-wrap break-all font-mono text-xs leading-6 text-slate-200">
+              {commandTask.output || tx("(无输出)", "(no output)")}
+            </pre>
           </div>
-          <div className="space-y-3 text-sm">
-            <div className="flex items-center justify-between p-2 rounded-lg bg-white/5">
-              <span className="text-text-muted">{tx("入站速率", "Inbound")}</span>
-              <span className="text-emerald-400 font-mono">{formatBytes(traffic?.net_in_speed || 0)}/s</span>
-            </div>
-            <div className="flex items-center justify-between p-2 rounded-lg bg-white/5">
-              <span className="text-text-muted">{tx("出站速率", "Outbound")}</span>
-              <span className="text-blue-400 font-mono">{formatBytes(traffic?.net_out_speed || 0)}/s</span>
-            </div>
-            <div className="flex items-center justify-between">
-              <span className="text-text-muted text-xs">{tx("入站总量", "In Total")}</span>
-              <span className="text-text-secondary text-xs font-mono">{formatBytes(traffic?.net_in_total || 0)}</span>
-            </div>
-            <div className="flex items-center justify-between">
-              <span className="text-text-muted text-xs">{tx("出站总量", "Out Total")}</span>
-              <span className="text-text-secondary text-xs font-mono">{formatBytes(traffic?.net_out_total || 0)}</span>
-            </div>
-          </div>
-        </div>
+        ) : null}
+      </SectionCard>
 
-        {/* Quick Command Card */}
-        <div 
-          className="glass-card rounded-2xl p-5 card-glow relative overflow-hidden"
-          onMouseMove={cardGlow.onMouseMove}
-  
-        >
-          <div className="flex items-center gap-2 mb-4">
-            <div className="p-2 rounded-lg bg-gradient-to-br from-emerald-500/20 to-green-500/20">
-              <Terminal className="w-4 h-4 text-emerald-400" />
-            </div>
-            <p className="text-sm font-medium text-text-primary">{tx("快速命令", "Quick Command")}</p>
-          </div>
-          <div className="flex gap-2">
-            <input
-              value={command}
-              onChange={(e) => setCommand(e.target.value)}
-              className="h-10 flex-1 rounded-xl border border-white/10 bg-white/5 px-4 font-mono text-sm text-text-primary transition-all focus:border-emerald-500/50 focus:bg-white/10 focus:outline-none focus:ring-2 focus:ring-emerald-500/20"
-              placeholder="uptime"
-              onKeyDown={(e) => e.key === "Enter" && handleExecCommand()}
-            />
-            <button
-              onClick={handleExecCommand}
-              disabled={runningCommand || !command.trim()}
-              className="h-10 rounded-xl bg-gradient-to-r from-emerald-500 to-green-500 px-4 text-sm font-medium text-white transition-all hover:opacity-90 disabled:opacity-50"
-            >
-              {runningCommand ? <Loader2 className="w-4 h-4 animate-spin" /> : tx("执行", "Run")}
-            </button>
-          </div>
-          {commandTask && (
-            <div className="mt-4 rounded-xl border border-white/10 bg-black/30 p-3 font-mono">
-              <p className="mb-2 text-xs text-text-muted flex items-center gap-2">
-                <span className={`w-2 h-2 rounded-full ${
-                  commandTask.status === "success" ? "bg-emerald-400" : 
-                  commandTask.status === "failed" ? "bg-red-400" : "bg-yellow-400 animate-pulse"
-                }`} />
-                {commandTask.status}
-              </p>
-              <pre className="max-h-32 overflow-y-auto whitespace-pre-wrap break-all text-xs text-emerald-300/80 scrollbar-thin">
-                {commandTask.output || tx("(无输出)", "(no output)")}
-              </pre>
-            </div>
-          )}
-        </div>
-      </div>
-
-      {/* Tab Switcher with gradient indicator */}
-      <div className="flex w-fit gap-1 rounded-2xl glass-card p-1.5">
-        {(["metrics", "files"] as const).map((value) => (
+      <div className="flex flex-wrap gap-2">
+        {([
+          ["metrics", tx("指标", "Metrics")],
+          ["files", tx("文件", "Files")],
+        ] as const).map(([value, label]) => (
           <button
             key={value}
+            type="button"
             onClick={() => setTab(value)}
-            className={`relative px-6 py-2 rounded-xl text-sm font-medium transition-all duration-300 ${
-              tab === value 
-                ? "text-white" 
-                : "text-text-muted hover:text-text-secondary"
-            }`}
+            className={[
+              "rounded-full px-4 py-2 text-sm font-medium transition-colors",
+              tab === value ? "bg-accent text-white" : "border border-border bg-surface text-text-secondary hover:border-border-hover hover:bg-card hover:text-text-primary",
+            ].join(" ")}
           >
-            {tab === value && (
-              <span className="absolute inset-0 rounded-xl bg-gradient-to-r from-purple-500 via-blue-500 to-pink-500 -z-10" />
-            )}
-            {value === "metrics" ? tx("指标", "Metrics") : tx("文件", "Files")}
+            {label}
           </button>
         ))}
       </div>
 
-      {tab === "metrics" && (
-        <div className="space-y-4">
-          {/* Range selector */}
-          <div className="flex gap-2">
-            {RANGES.map((r) => (
-              <button
-                key={r}
-                onClick={() => setRange(r)}
-                className={`px-4 py-2 rounded-xl text-sm font-medium transition-all ${
-                  range === r
-                    ? "bg-gradient-to-r from-purple-500 to-blue-500 text-white shadow-lg shadow-purple-500/20"
-                    : "glass-card text-text-secondary hover:text-text-primary hover:border-purple-500/30"
-                }`}
-              >
-                {r}
-              </button>
-            ))}
-          </div>
-
-          {/* Chart Card */}
-          <div 
-            className="glass-card rounded-2xl p-6 card-glow relative overflow-hidden"
-            onMouseMove={cardGlow.onMouseMove}
-    
-          >
-            {metricsLoading ? (
-              <div className="flex items-center justify-center h-72">
-                <div className="flex flex-col items-center gap-3">
-                  <Loader2 className="h-8 w-8 animate-spin text-purple-400" />
-                  <span className="text-sm text-text-muted">{tx("加载中...", "Loading...")}</span>
-                </div>
-              </div>
-            ) : chartData.length === 0 ? (
-              <div className="flex h-72 items-center justify-center">
-                <div className="text-center">
-                  <Activity className="w-12 h-12 mx-auto mb-3 text-text-muted/50" />
-                  <p className="text-sm text-text-muted">{tx("暂无指标数据", "No metrics data available")}</p>
-                </div>
-              </div>
-            ) : (
-              <ResponsiveContainer width="100%" height={320}>
+      {tab === "metrics" ? (
+        <SectionCard
+          title={tx("指标趋势", "Metric Trends")}
+          description={tx("CPU、内存与磁盘占用趋势按时间范围切换。", "CPU, memory, and disk usage trends are switchable by time range.")}
+          actions={
+            <div className="flex flex-wrap gap-2">
+              {RANGES.map((item) => (
+                <button
+                  key={item}
+                  type="button"
+                  onClick={() => setRange(item)}
+                  className={[
+                    "rounded-full px-3 py-1.5 text-xs font-medium transition-colors",
+                    range === item ? "bg-accent text-white" : "border border-border bg-surface text-text-secondary hover:border-border-hover hover:bg-card",
+                  ].join(" ")}
+                >
+                  {item}
+                </button>
+              ))}
+            </div>
+          }
+        >
+          {metricsLoading ? (
+            <div className="flex items-center justify-center py-20"><Loader2 className="h-6 w-6 animate-spin text-accent" /></div>
+          ) : chartData.length === 0 ? (
+            <EmptyState icon={Activity} title={tx("暂无指标数据", "No metrics data available")} description={tx("当前时间范围没有可用的聚合数据。", "No aggregated metrics are available for the selected range.")} />
+          ) : (
+            <div className="h-[340px]">
+              <ResponsiveContainer width="100%" height="100%">
                 <LineChart data={chartData}>
-                  <defs>
-                    <linearGradient id="cpuGradient" x1="0" y1="0" x2="1" y2="0">
-                      <stop offset="0%" stopColor="#8b5cf6" />
-                      <stop offset="100%" stopColor="#a78bfa" />
-                    </linearGradient>
-                    <linearGradient id="ramGradient" x1="0" y1="0" x2="1" y2="0">
-                      <stop offset="0%" stopColor="#3b82f6" />
-                      <stop offset="100%" stopColor="#60a5fa" />
-                    </linearGradient>
-                    <linearGradient id="diskGradient" x1="0" y1="0" x2="1" y2="0">
-                      <stop offset="0%" stopColor="#ec4899" />
-                      <stop offset="100%" stopColor="#f472b6" />
-                    </linearGradient>
-                  </defs>
-                  <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.06)" />
-                  <XAxis 
-                    dataKey="time" 
-                    stroke="rgba(255,255,255,0.4)" 
-                    fontSize={11} 
-                    tickLine={false}
-                    axisLine={{ stroke: 'rgba(255,255,255,0.1)' }}
-                  />
-                  <YAxis 
-                    stroke="rgba(255,255,255,0.4)" 
-                    fontSize={11} 
-                    tickLine={false} 
-                    domain={[0, 100]} 
-                    unit="%"
-                    axisLine={{ stroke: 'rgba(255,255,255,0.1)' }}
-                  />
+                  <CartesianGrid strokeDasharray="3 3" stroke="rgba(148, 163, 184, 0.28)" />
+                  <XAxis dataKey="time" stroke="rgba(100,116,139,0.9)" fontSize={11} tickLine={false} axisLine={{ stroke: "rgba(148,163,184,0.35)" }} />
+                  <YAxis stroke="rgba(100,116,139,0.9)" fontSize={11} tickLine={false} domain={[0, 100]} unit="%" axisLine={{ stroke: "rgba(148,163,184,0.35)" }} />
                   <Tooltip
                     contentStyle={{
-                      backgroundColor: "rgba(15, 10, 30, 0.95)",
-                      border: "1px solid rgba(255,255,255,0.1)",
-                      borderRadius: 12,
-                      color: "#fff",
+                      backgroundColor: "rgba(255,255,255,0.96)",
+                      border: "1px solid rgba(148,163,184,0.35)",
+                      borderRadius: 16,
+                      color: "#0f172a",
                       fontSize: 12,
-                      boxShadow: "0 8px 32px rgba(0,0,0,0.4)",
-                      backdropFilter: "blur(8px)",
                     }}
-                    cursor={{ stroke: 'rgba(139, 92, 246, 0.3)' }}
                   />
-                  <Legend 
-                    wrapperStyle={{ paddingTop: 16 }}
-                    formatter={(value) => <span className="text-text-secondary text-sm">{value}</span>}
-                  />
-                  <Line 
-                    type="monotone" 
-                    dataKey="CPU" 
-                    stroke="url(#cpuGradient)" 
-                    dot={false} 
-                    strokeWidth={2.5}
-                    activeDot={{ r: 6, fill: '#8b5cf6', stroke: '#fff', strokeWidth: 2 }}
-                  />
-                  <Line 
-                    type="monotone" 
-                    dataKey="RAM" 
-                    stroke="url(#ramGradient)" 
-                    dot={false} 
-                    strokeWidth={2.5}
-                    activeDot={{ r: 6, fill: '#3b82f6', stroke: '#fff', strokeWidth: 2 }}
-                  />
-                  <Line 
-                    type="monotone" 
-                    dataKey="Disk" 
-                    stroke="url(#diskGradient)" 
-                    dot={false} 
-                    strokeWidth={2.5}
-                    activeDot={{ r: 6, fill: '#ec4899', stroke: '#fff', strokeWidth: 2 }}
-                  />
+                  <Legend wrapperStyle={{ paddingTop: 16 }} />
+                  <Line type="monotone" dataKey="CPU" stroke="#0369a1" dot={false} strokeWidth={2.5} />
+                  <Line type="monotone" dataKey="RAM" stroke="#0f766e" dot={false} strokeWidth={2.5} />
+                  <Line type="monotone" dataKey="Disk" stroke="#b45309" dot={false} strokeWidth={2.5} />
                 </LineChart>
               </ResponsiveContainer>
-            )}
-          </div>
-        </div>
-      )}
-
-      {tab === "files" && (
-        <div className="space-y-4">
-          {/* Upload Section Card */}
-          <div 
-            className="glass-card rounded-2xl p-5 card-glow relative overflow-hidden"
-            onMouseMove={cardGlow.onMouseMove}
-    
-          >
-            <div className="flex items-center justify-between gap-4 flex-wrap mb-4">
-              <div>
-                <p className="text-sm font-medium text-text-primary flex items-center gap-2">
-                  <Folder className="w-4 h-4 text-purple-400" />
-                  {tx("当前目录", "Current Directory")}
-                </p>
-                <p className="break-all text-xs text-text-muted mt-1 font-mono">{currentPath}</p>
-              </div>
-              <button
-                onClick={handleRefreshFiles}
-                className="flex h-9 items-center gap-2 rounded-xl glass-card px-4 text-sm font-medium text-text-primary transition-all hover:border-purple-500/30"
-              >
-                <RefreshCw className="w-4 h-4" />
-                {tx("刷新", "Refresh")}
-              </button>
             </div>
+          )}
+        </SectionCard>
+      ) : null}
 
-            <div className="grid gap-4 sm:grid-cols-[1fr_auto] sm:items-end">
+      {tab === "files" ? (
+        <div className="space-y-4">
+          <SectionCard title={tx("上传到当前目录", "Upload to Current Directory")} description={tx("上传目标目录保持与当前浏览路径一致。", "Uploads target the same directory as the current browser path.")}> 
+            <div className="grid gap-4 md:grid-cols-[1fr_auto] md:items-end">
               <div className="space-y-2">
-                <label className="block text-xs text-text-secondary">{tx("上传文件", "Upload File")}</label>
-                <div className="flex items-center gap-3 rounded-xl border-2 border-dashed border-white/10 bg-white/5 px-4 py-3 transition-all hover:border-purple-500/30 hover:bg-white/10">
+                <label className="text-sm font-medium text-text-secondary">{tx("上传文件", "Upload File")}</label>
+                <div className="flex items-center gap-3 rounded-2xl border border-dashed border-border bg-surface px-4 py-4">
                   <input
                     ref={fileInputRef}
                     type="file"
@@ -718,71 +540,50 @@ export default function NodeDetail() {
                       setUploadError("");
                     }}
                   />
-                  <button
-                    onClick={() => fileInputRef.current?.click()}
-                    className="flex items-center gap-2 rounded-xl bg-gradient-to-r from-purple-500/20 to-blue-500/20 border border-purple-500/30 px-4 py-2 text-sm text-text-primary transition-all hover:from-purple-500/30 hover:to-blue-500/30"
-                  >
-                    <Upload className="w-4 h-4 text-purple-400" />
-                    {tx("选择文件", "Choose File")}
+                  <button type="button" onClick={() => fileInputRef.current?.click()} className="rounded-2xl border border-border bg-card px-4 py-2.5 text-sm font-medium text-text-primary transition-colors hover:border-border-hover hover:bg-surface-subtle">
+                    <span className="inline-flex items-center gap-2"><Upload className="h-4 w-4" />{tx("选择文件", "Choose File")}</span>
                   </button>
                   <div className="min-w-0 flex-1">
-                    <p className="truncate text-sm text-text-primary">
-                      {selectedFile ? selectedFile.name : tx("未选择文件", "No file selected")}
-                    </p>
-                    {selectedFile && (
-                      <p className="text-xs text-text-muted font-mono">{formatBytes(selectedFile.size)}</p>
-                    )}
+                    <p className="truncate text-sm font-medium text-text-primary">{selectedFile ? selectedFile.name : tx("未选择文件", "No file selected")}</p>
+                    {selectedFile ? <p className="text-xs text-text-muted">{formatBytes(selectedFile.size)}</p> : null}
                   </div>
                 </div>
               </div>
-
-              <button
-                onClick={handleUpload}
-                disabled={uploading || !selectedFile}
-                className="h-11 rounded-xl gradient-button px-6 text-sm font-medium text-white disabled:opacity-50"
-              >
+              <button type="button" onClick={() => void handleUpload()} disabled={uploading || !selectedFile} className="gradient-button rounded-2xl px-4 py-3 text-sm font-medium text-white disabled:opacity-50">
                 {uploading ? tx("上传中...", "Uploading...") : tx("上传到当前目录", "Upload Here")}
               </button>
             </div>
 
-            {uploadError && (
-              <div className="mt-4 rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-300 flex items-center gap-2">
-                <span className="w-2 h-2 rounded-full bg-red-400" />
-                {uploadError}
-              </div>
-            )}
+            {uploadError ? <Banner tone="danger" role="alert" className="mt-4">{uploadError}</Banner> : null}
 
-            {uploading && (
+            {uploading ? (
               <div className="mt-4 space-y-2">
-                <div className="flex items-center justify-between text-xs">
-                  <span className="text-text-secondary">{tx("上传进度", "Upload Progress")}</span>
-                  <span className="text-purple-400 font-mono">{uploadProgress}%</span>
+                <div className="flex items-center justify-between text-xs text-text-secondary">
+                  <span>{tx("上传进度", "Upload Progress")}</span>
+                  <span className="font-mono text-text-primary">{uploadProgress}%</span>
                 </div>
-                <div className="h-2 overflow-hidden rounded-full bg-white/10">
-                  <div
-                    className="h-full rounded-full bg-gradient-to-r from-purple-500 via-blue-500 to-pink-500 transition-all duration-200 relative"
-                    style={{ width: `${uploadProgress}%` }}
-                  >
-                    <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/30 to-transparent animate-shimmer" />
-                  </div>
+                <div className="h-2 overflow-hidden rounded-full bg-surface-subtle">
+                  <div className="h-full rounded-full progress-gradient transition-all duration-200" style={{ width: `${uploadProgress}%` }} />
                 </div>
               </div>
-            )}
-          </div>
+            ) : null}
+          </SectionCard>
 
-          {/* File Browser Card */}
-          <div className="overflow-hidden rounded-2xl glass-card">
-            {/* Breadcrumbs */}
-            <div className="flex items-center gap-1 overflow-x-auto border-b border-white/10 px-5 py-3 text-sm bg-white/5">
+          <SectionCard
+            title={tx("目录浏览", "Directory Browser")}
+            description={tx("浏览 Agent 当前受管目录，并通过 Master 代理下载文件或文件夹。", "Browse the current managed directory on the agent and download files or folders through the master proxy.")}
+            actions={
+              <button type="button" onClick={handleRefreshFiles} className="inline-flex items-center gap-2 rounded-2xl border border-border bg-surface px-4 py-2.5 text-sm font-medium text-text-primary transition-colors hover:border-border-hover hover:bg-card">
+                <RefreshCw className="h-4 w-4" />
+                {tx("刷新", "Refresh")}
+              </button>
+            }
+          >
+            <div className="mb-4 flex flex-wrap items-center gap-2 text-sm">
               {breadcrumbs.map((crumb, index) => (
-                <span key={crumb.path} className="flex items-center gap-1 shrink-0">
-                  {index > 0 && <ChevronRight className="h-3 w-3 text-text-muted" />}
-                  <button
-                    onClick={() => setCurrentPath(crumb.path)}
-                    className={`transition-colors hover:text-purple-400 ${
-                      index === breadcrumbs.length - 1 ? "text-purple-400 font-medium" : "text-text-muted"
-                    }`}
-                  >
+                <span key={crumb.path} className="inline-flex items-center gap-2">
+                  {index > 0 ? <ChevronRight className="h-4 w-4 text-text-muted" /> : null}
+                  <button type="button" onClick={() => setCurrentPath(crumb.path)} className={index === breadcrumbs.length - 1 ? "font-medium text-text-primary" : "text-text-secondary hover:text-text-primary"}>
                     {crumb.label}
                   </button>
                 </span>
@@ -790,75 +591,42 @@ export default function NodeDetail() {
             </div>
 
             {filesLoading ? (
-              <div className="flex items-center justify-center h-48">
-                <Loader2 className="h-6 w-6 animate-spin text-purple-400" />
-              </div>
+              <div className="flex items-center justify-center py-20"><Loader2 className="h-6 w-6 animate-spin text-accent" /></div>
             ) : files.length === 0 ? (
-              <div className="flex h-48 items-center justify-center">
-                <div className="text-center">
-                  <Folder className="w-12 h-12 mx-auto mb-3 text-text-muted/30" />
-                  <p className="text-sm text-text-muted">{tx("目录为空", "Empty directory")}</p>
-                </div>
-              </div>
+              <EmptyState icon={Folder} title={tx("目录为空", "Empty directory")} description={tx("当前路径下暂时没有可展示的文件或文件夹。", "There are no visible files or folders in the current path yet.")} />
             ) : (
-              <div className="divide-y divide-white/5">
-                {currentPath !== "/" && (
-                  <button
-                    onClick={() => setCurrentPath(parentPath(currentPath))}
-                    className="flex w-full items-center gap-3 px-5 py-3 text-left transition-all hover:bg-white/5"
-                  >
-                    <ArrowLeft className="h-4 w-4 text-text-muted" />
-                    <span className="text-sm text-text-secondary">..</span>
-                  </button>
-                )}
-                {[...files]
-                  .sort((a, b) => (a.is_dir === b.is_dir ? a.name.localeCompare(b.name) : a.is_dir ? -1 : 1))
-                  .map((entry) => (
-                    <div
-                      key={entry.path}
-                      className="group flex w-full items-center gap-3 px-5 py-3 transition-all hover:bg-gradient-to-r hover:from-purple-500/5 hover:to-blue-500/5"
-                    >
-                      <button
-                        onClick={() => handleFileClick(entry)}
-                        className="flex items-center gap-3 flex-1 min-w-0 text-left"
-                      >
-                        {entry.is_dir ? (
-                          <div className="p-1.5 rounded-lg bg-purple-500/20">
-                            <Folder className="h-4 w-4 shrink-0 text-purple-400" />
-                          </div>
-                        ) : (
-                          <div className="p-1.5 rounded-lg bg-white/10">
-                            <FileText className="h-4 w-4 shrink-0 text-text-muted" />
-                          </div>
-                        )}
-                        <span className="truncate text-sm text-text-primary group-hover:text-purple-300 transition-colors">
-                          {entry.name}
-                        </span>
-                        {!entry.is_dir && (
-                          <span className="ml-auto shrink-0 text-xs text-text-muted font-mono">
-                            {formatBytes(entry.size)}
+              <div className="overflow-hidden rounded-2xl border border-border">
+                <div className="divide-y divide-border bg-card">
+                  {currentPath !== "/" ? (
+                    <button type="button" onClick={() => setCurrentPath(parentPath(currentPath))} className="flex w-full items-center gap-3 px-4 py-3 text-left text-sm text-text-secondary transition-colors hover:bg-surface">
+                      <ArrowLeft className="h-4 w-4" />..
+                    </button>
+                  ) : null}
+                  {[...files]
+                    .sort((a, b) => (a.is_dir === b.is_dir ? a.name.localeCompare(b.name) : a.is_dir ? -1 : 1))
+                    .map((entry) => (
+                      <div key={entry.path} className="group flex items-center gap-3 px-4 py-3 transition-colors hover:bg-surface">
+                        <button type="button" onClick={() => void handleFileClick(entry)} className="flex min-w-0 flex-1 items-center gap-3 text-left">
+                          <span className="flex h-10 w-10 items-center justify-center rounded-2xl bg-surface-subtle text-text-secondary">
+                            {entry.is_dir ? <Folder className="h-4 w-4" /> : <FileText className="h-4 w-4" />}
                           </span>
-                        )}
-                      </button>
-                      <div className="flex items-center gap-1 shrink-0">
-                        <button
-                          onClick={() => {
-                            void handleDownload(entry.path);
-                          }}
-                          className="rounded-lg p-2 text-text-muted opacity-0 transition-all hover:text-purple-400 hover:bg-purple-500/10 group-hover:opacity-100"
-                          title={entry.is_dir ? tx("下载文件夹", "Download folder") : tx("下载文件", "Download file")}
-                        >
-                          <Download className="w-4 h-4" />
+                          <div className="min-w-0 flex-1">
+                            <p className="truncate text-sm font-medium text-text-primary">{entry.name}</p>
+                            <p className="truncate text-xs text-text-muted">{entry.path}</p>
+                          </div>
+                          {!entry.is_dir ? <span className="shrink-0 text-xs text-text-muted">{formatBytes(entry.size)}</span> : null}
+                        </button>
+                        <button type="button" onClick={() => void handleDownload(entry.path)} className="rounded-2xl border border-transparent p-2 text-text-muted transition-colors hover:border-border hover:bg-card hover:text-accent" title={entry.is_dir ? tx("下载文件夹", "Download folder") : tx("下载文件", "Download file")}>
+                          <Download className="h-4 w-4" />
                         </button>
                       </div>
-                    </div>
-                  ))}
+                    ))}
+                </div>
               </div>
             )}
-          </div>
+          </SectionCard>
         </div>
-      )}
+      ) : null}
     </div>
   );
 }
-
